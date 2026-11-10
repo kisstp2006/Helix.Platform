@@ -105,9 +105,8 @@ namespace helix::platform
         bool TryAcquire();
 
     private:
-        Mutex mutex_;
-        ConditionVariable condition_;
-        u32 count_;
+        std::atomic<i32> count_;
+        std::atomic<u32> waiters_{0};
     };
 
     class SpinLock
