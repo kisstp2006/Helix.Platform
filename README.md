@@ -30,7 +30,6 @@ dynamic libraries, windows, input events and the main loop.
 ```cpp
 using namespace helix::platform;
 Window* window = Window::Create({.title = "Helix", .width = 1280, .height = 720});
-helix::Array<Event> events;
 RunMainLoop([](void* user) {
     auto* w = static_cast<Window*>(user);
     helix::Array<Event> events;
