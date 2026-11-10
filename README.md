@@ -9,21 +9,21 @@ dynamic libraries, windows, input events and the main loop.
 |---|---|---|
 | Windows | Win32, per-monitor DPI v2, UTF-16 text input | Win32 threads, SRW locks, high resolution waitable timers |
 | Linux | X11, libX11 is loaded at runtime | pthreads, `clock_gettime` |
-| Android | `ANativeWindow` and input fed by the player Java glue through `helix/platform/android.h` | pthreads |
+| Android | `ANativeWindow` and input fed by the player Java glue through `Helix/Platform/Window/Android.h` | pthreads |
 | Web | Canvas and DOM events through the Emscripten HTML5 API, `requestAnimationFrame` main loop | Single threaded unless built with pthreads |
 
 ## Layout
 
 | Path | Content |
 |---|---|
-| `include/helix/platform/time.h` | `Ticks`, `Now`, `SleepSeconds`, `Stopwatch` |
-| `include/helix/platform/thread.h` | `Thread`, `Mutex`, `ConditionVariable`, `Semaphore`, `SpinLock`, core count |
-| `include/helix/platform/file_system.h` | `File`, whole file read and write, directories, listing, paths |
-| `include/helix/platform/dynamic_library.h` | `DynamicLibrary` |
-| `include/helix/platform/input.h` | `KeyCode` (script API values), mouse buttons, `Event` |
-| `include/helix/platform/window.h` | `Window`, `RunMainLoop` |
-| `src/platform/<platform>/` | Backends, `posix/` is shared by Linux, Android and the web |
-| `examples/window_demo.cpp` | Opens a window and logs every input event |
+| `Source/Helix/Platform/Time/Time.h` | `Ticks`, `Now`, `SleepSeconds`, `Stopwatch` |
+| `Source/Helix/Platform/Threading/Thread.h` | `Thread`, `Mutex`, `ConditionVariable`, `Semaphore`, `SpinLock`, core count |
+| `Source/Helix/Platform/IO/FileSystem.h` | `File`, whole file read and write, directories, listing, paths |
+| `Source/Helix/Platform/System/DynamicLibrary.h` | `DynamicLibrary` |
+| `Source/Helix/Platform/Window/Input.h` | `KeyCode` (script API values), mouse buttons, `Event` |
+| `Source/Helix/Platform/Window/Window.h` | `Window`, `RunMainLoop` |
+| `.../<Topic>/Platform/<Os>/` | Backends (`Win`, `Linux`, `Android`, `Web`), `Posix` is shared by Linux, Android and the web |
+| `Examples/WindowDemo/WindowDemo.cpp` | Opens a window and logs every input event |
 
 ## Example
 
