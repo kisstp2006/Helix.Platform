@@ -8,6 +8,9 @@
 #include <helix/testing/test.h>
 
 #include <atomic>
+#include <cstdlib>
+
+#define HX_CHECK_MSG_NO_DISPLAY() HX_CHECK(std::getenv("DISPLAY") == nullptr)
 
 using namespace helix;
 using namespace helix::platform;
