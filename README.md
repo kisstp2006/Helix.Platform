@@ -41,7 +41,8 @@ RunMainLoop([](void* user) {
 ## Build
 
 ```
-git clone --recursive https://github.com/kisstp2006/Helix.Platform
+git clone https://github.com/kisstp2006/Helix.Platform
+git -C Helix.Platform submodule update --init
 cmake --preset windows-debug
 cmake --build --preset windows-debug
 ctest --preset windows-debug
