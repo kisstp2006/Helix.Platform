@@ -5,6 +5,30 @@
 
 #include <cstring>
 
+// The Screen Wake Lock API, where the browser has it.
+EM_JS(void, helix_web_keep_screen_on, (int keepOn), {
+    if (typeof navigator === "undefined" || !navigator.wakeLock)
+        return;
+    if (keepOn)
+    {
+        if (!Module.helixWakeLock)
+            navigator.wakeLock.request("screen").then(function(lock) { Module.helixWakeLock = lock; }, function() {});
+    }
+    else if (Module.helixWakeLock)
+    {
+        Module.helixWakeLock.release();
+        Module.helixWakeLock = null;
+    }
+});
+
+// The Screen Orientation API's lock (browsers allow it in full screen).
+EM_JS(void, helix_web_lock_orientation, (int orientation), {
+    if (typeof screen === "undefined" || !screen.orientation || !screen.orientation.lock)
+        return;
+    var names = [ "any", "portrait-primary", "portrait-secondary", "landscape-primary", "landscape-secondary", "any" ];
+    screen.orientation.lock(names[orientation] || "any").catch(function() {});
+});
+
 namespace helix::platform
 {
     namespace
@@ -268,6 +292,9 @@ namespace helix::platform
     }
 
     bool Window::IsSupported() { return EM_ASM_INT({ return typeof document !== 'undefined' ? 1 : 0; }) != 0; }
+
+    void SetKeepScreenOn(bool keepOn) { helix_web_keep_screen_on(keepOn ? 1 : 0); }
+    void SetDisplayOrientation(DisplayOrientation orientation) { helix_web_lock_orientation(int(orientation)); }
 
     // One display: the browser's screen in device pixels.
     void GetDisplays(Array<DisplayInfo>& out)

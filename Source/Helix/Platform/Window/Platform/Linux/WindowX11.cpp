@@ -410,6 +410,10 @@ namespace helix::platform
         return true;
     }
 
+    // X11 has no portable call for it (the screen saver extension is another library).
+    void SetKeepScreenOn(bool) {}
+    void SetDisplayOrientation(DisplayOrientation) {}
+
     void GetDisplays(Array<DisplayInfo>& out)
     {
         out.Clear();

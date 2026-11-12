@@ -40,6 +40,21 @@ namespace helix::platform
     // The modes of a display (largest first, no duplicates); its current mode when the system lists none.
     void GetDisplayModes(u32 display, Array<DisplayMode>& out);
 
+    // The orientation an application asks of a mobile display (the script API's ScreenOrientation values).
+    enum class DisplayOrientation : u8
+    {
+        Portrait = 1,
+        PortraitUpsideDown = 2,
+        LandscapeLeft = 3,
+        LandscapeRight = 4,
+        Auto = 5,
+    };
+
+    // Keeps the display from dimming and sleeping (Windows, Android, the Web's wake lock; nothing on X11).
+    void SetKeepScreenOn(bool keepOn);
+    // Mobile displays (Android, the Web's orientation lock); nothing on the desktop.
+    void SetDisplayOrientation(DisplayOrientation orientation);
+
     inline constexpr i32 kDefaultWindowPosition = 0x7fffffff;
 
     struct WindowDesc

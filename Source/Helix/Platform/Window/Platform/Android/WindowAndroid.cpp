@@ -2,7 +2,12 @@
 #include <Helix/Platform/Threading/Thread.h>
 #include <Helix/Platform/Window/Window.h>
 
+#include <Helix/Platform/Time/Time.h>
+
+#include <android/asset_manager.h>
 #include <android/native_window.h>
+
+#include <atomic>
 
 namespace helix::platform
 {
@@ -106,6 +111,116 @@ namespace helix::platform
     }
 
     bool Window::IsSupported() { return true; }
+
+    namespace
+    {
+        JavaVM* javaVm = nullptr;
+        jobject activityObject = nullptr;
+        AAssetManager* assetManager = nullptr;
+        thread_local JNIEnv* threadEnv = nullptr;
+        std::atomic<ANativeWindow*> usedWindow{nullptr};
+
+        JNIEnv* Env()
+        {
+            if (threadEnv)
+                return threadEnv;
+            JNIEnv* env = nullptr;
+            if (javaVm && javaVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK)
+                return env;
+            return nullptr;
+        }
+
+        // A void method of the activity; with an argument when `hasValue`.
+        void CallActivity(const char* method, const char* signature, jvalue value, bool hasValue)
+        {
+            JNIEnv* env = Env();
+            if (!env || !activityObject)
+                return;
+            jclass c = env->GetObjectClass(activityObject);
+            jmethodID m = env->GetMethodID(c, method, signature);
+            if (m)
+            {
+                if (hasValue)
+                    env->CallVoidMethodA(activityObject, m, &value);
+                else
+                    env->CallVoidMethod(activityObject, m);
+            }
+            if (env->ExceptionCheck())
+                env->ExceptionClear();
+            env->DeleteLocalRef(c);
+        }
+    }
+
+    void SetKeepScreenOn(bool keepOn)
+    {
+        jvalue v;
+        v.z = keepOn ? JNI_TRUE : JNI_FALSE;
+        CallActivity("setKeepScreenOn", "(Z)V", v, true);
+    }
+
+    void SetDisplayOrientation(DisplayOrientation orientation)
+    {
+        jvalue v;
+        v.i = jint(orientation);
+        CallActivity("setOrientation", "(I)V", v, true);
+    }
+
+    namespace android
+    {
+        void SetActivity(JavaVM* vm, jobject activity)
+        {
+            JNIEnv* env = nullptr;
+            JavaVM* machine = vm ? vm : javaVm;
+            if (machine)
+                machine->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6);
+            if (activityObject && env)
+                env->DeleteGlobalRef(activityObject);
+            activityObject = activity && env ? env->NewGlobalRef(activity) : nullptr;
+            javaVm = vm;
+        }
+
+        void SetAssetManager(AAssetManager* manager) { assetManager = manager; }
+
+        void AttachThread()
+        {
+            if (javaVm && !threadEnv)
+                javaVm->AttachCurrentThread(&threadEnv, nullptr);
+        }
+
+        void DetachThread()
+        {
+            if (javaVm && threadEnv)
+            {
+                javaVm->DetachCurrentThread();
+                threadEnv = nullptr;
+            }
+        }
+
+        void WaitForNativeWindowRelease(ANativeWindow* window)
+        {
+            for (int i = 0; i < 100 && window && usedWindow.load() == window; i++)
+                SleepSeconds(0.01);
+        }
+
+        bool ReadAsset(StringView path, Array<u8>& out)
+        {
+            if (!assetManager)
+                return false;
+            String name(path);
+            AAsset* asset = AAssetManager_open(assetManager, name.CStr(), AASSET_MODE_BUFFER);
+            if (!asset)
+                return false;
+            off64_t size = AAsset_getLength64(asset);
+            out.Resize(usize(size));
+            bool ok = size == 0 || AAsset_read(asset, out.Data(), usize(size)) == int(size);
+            AAsset_close(asset);
+            return ok;
+        }
+
+        void AcknowledgeNativeWindow(ANativeWindow* window) { usedWindow.store(window); }
+
+        void FinishActivity() { CallActivity("finishFromNative", "()V", jvalue{}, false); }
+    }
 
     // One display: the surface (density from the content scale, 160 dpi at scale 1).
     void GetDisplays(Array<DisplayInfo>& out)

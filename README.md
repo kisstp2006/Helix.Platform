@@ -9,7 +9,7 @@ dynamic libraries, windows, input events and the main loop.
 |---|---|---|
 | Windows | Win32, per-monitor DPI v2, UTF-16 text input | Win32 threads, SRW locks, high resolution waitable timers |
 | Linux | X11, libX11 is loaded at runtime | pthreads, `clock_gettime` |
-| Android | `ANativeWindow` and input fed by the player Java glue through `Helix/Platform/Window/Android.h` | pthreads |
+| Android | `ANativeWindow`, input and focus fed by the activity in `Android/` (Java and its JNI glue) through `Helix/Platform/Window/Android.h`; the APK's assets | pthreads |
 | Web | Canvas and DOM events through the Emscripten HTML5 API, `requestAnimationFrame` main loop | Single threaded unless built with pthreads |
 
 ## Layout
@@ -20,10 +20,25 @@ dynamic libraries, windows, input events and the main loop.
 | `Source/Helix/Platform/Threading/Thread.h` | `Thread`, `Mutex`, `ConditionVariable`, `Semaphore`, `SpinLock`, core count |
 | `Source/Helix/Platform/IO/FileSystem.h` | `File`, whole file read and write, directories, listing, paths |
 | `Source/Helix/Platform/System/DynamicLibrary.h` | `DynamicLibrary` |
+| `Source/Helix/Platform/System/Process.h` | `SingleInstance`, `IsDebuggerAttached`, `WaitForNativeDebugger` |
 | `Source/Helix/Platform/Window/Input.h` | `KeyCode` (script API values), mouse buttons, `Event` |
-| `Source/Helix/Platform/Window/Window.h` | `Window` (size, position, windowed / maximized / full screen / exclusive full screen modes, no frame, embedding into a parent), the displays and their modes, `RunMainLoop` |
+| `Source/Helix/Platform/Window/Window.h` | `Window` (size, position, windowed / maximized / full screen / exclusive full screen modes, no frame, embedding into a parent), the displays and their modes, `SetKeepScreenOn`, `SetDisplayOrientation`, `RunMainLoop` |
 | `.../<Topic>/Platform/<Os>/` | Backends (`Win`, `Linux`, `Android`, `Web`), `Posix` is shared by Linux, Android and the web |
-| `Examples/WindowDemo/WindowDemo.cpp` | Opens a window and logs every input event |
+| `Examples/WindowDemo/WindowDemo.cpp` | Opens a window and logs every input event (an APK on Android, a page on the Web) |
+| `Android/` | `HelixActivity` (Java), its JNI glue (`Native/`), the manifest template, `helix_add_android_app` |
+| `Web/` | The loader (`Loader/HelixPreload.js`), `helix_add_web_app` |
+
+## Applications on Android and the Web
+
+- `helix_add_android_app(<shared library> PACKAGE <name> LABEL <text> [ASSETS <folder> ASSETS_PATH <path>])` links the
+  activity's JNI glue into the library, which defines `int HelixMain(int argc, char** argv)`: it runs on a thread of
+  its own with the intent's `args` extra. When `ANDROID_HOME` has build tools and a platform and a JDK is found
+  (`JAVA_HOME`), `<target>_apk` builds and signs `<output name>.apk` with the SDK's tools (no Gradle). The application
+  reads packaged files with `android::ReadAsset` and tells which surface its graphics device uses with
+  `android::AcknowledgeNativeWindow`, so the activity can let a surface go.
+- `helix_add_web_app(<executable> SHELL <html> [FILES <folder> FILES_PATH <path>])` makes the page from the template
+  with the loader, which fetches before `main` what the page's `Module.helixPreload` names (files, list files of paths
+  or guid and path lines, files next to listed ones) and takes `?args=`.
 
 ## Example
 

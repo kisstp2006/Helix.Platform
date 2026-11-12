@@ -497,6 +497,9 @@ namespace helix::platform
 
     bool Window::IsSupported() { return true; }
 
+    void SetKeepScreenOn(bool keepOn) { SetThreadExecutionState(keepOn ? ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED : ES_CONTINUOUS); }
+    void SetDisplayOrientation(DisplayOrientation) {}
+
     void GetDisplays(Array<DisplayInfo>& out)
     {
         EnableDpiAwareness();

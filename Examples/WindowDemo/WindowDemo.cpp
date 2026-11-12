@@ -1,3 +1,6 @@
+#if HX_PLATFORM_ANDROID
+#include <Helix/Platform/Window/Android.h>
+#endif
 #include <Helix/Core/Logging/Log.h>
 #include <Helix/Platform/Threading/Thread.h>
 #include <Helix/Platform/Time/Time.h>
@@ -75,7 +78,12 @@ namespace
     }
 }
 
+// On Android the activity of Helix.Platform runs HelixMain (helix_add_android_app).
+#if HX_PLATFORM_ANDROID
+int HelixMain(int argc, char** argv)
+#else
 int main(int argc, char** argv)
+#endif
 {
     static Demo demo;
     for (int i = 1; i < argc; i++)
