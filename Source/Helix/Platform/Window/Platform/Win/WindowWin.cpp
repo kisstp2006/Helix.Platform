@@ -218,10 +218,17 @@ namespace helix::platform
                 bool wasFull = mode == WindowMode::FullScreen || mode == WindowMode::ExclusiveFullScreen;
                 if (!wasFull && full)
                 {
-                    WINDOWPLACEMENT wp{};
-                    wp.length = sizeof(wp);
-                    GetWindowPlacement(hwnd, &wp);
-                    windowedRect = wp.rcNormalPosition;
+                    // Screen coordinates of the window as it is (a maximized one comes back maximized from SW_RESTORE's
+                    // point of view: its normal place is taken then).
+                    if (mode == WindowMode::Maximized)
+                    {
+                        WINDOWPLACEMENT wp{};
+                        wp.length = sizeof(wp);
+                        GetWindowPlacement(hwnd, &wp);
+                        windowedRect = wp.rcNormalPosition;
+                    }
+                    else
+                        GetWindowRect(hwnd, &windowedRect);
                     haveWindowedRect = true;
                 }
                 RestoreDisplayMode();
