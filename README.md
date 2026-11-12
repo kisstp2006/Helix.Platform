@@ -30,10 +30,12 @@ dynamic libraries, windows, input events and the main loop.
 
 ## Applications on Android and the Web
 
-- `helix_add_android_app(<shared library> PACKAGE <name> LABEL <text> [ASSETS <folder> ASSETS_PATH <path>])` links the
-  activity's JNI glue into the library, which defines `int HelixMain(int argc, char** argv)`: it runs on a thread of
-  its own with the intent's `args` extra. When `ANDROID_HOME` has build tools and a platform and a JDK is found
-  (`JAVA_HOME`), `<target>_apk` builds and signs `<output name>.apk` with the SDK's tools (no Gradle). The application
+- `helix_add_android_app(<shared library> PACKAGE <name> LABEL <text> [ASSETS <folder> ASSETS_PATH <path>]
+  [PLATFORM <library>] [LIBRARIES <shared library>...])` links the activity's JNI glue into the library (with
+  Helix::Platform, or the shared library given as PLATFORM that holds it), which defines
+  `int HelixMain(int argc, char** argv)`: it runs on a thread of its own with the intent's `args` extra. When
+  `ANDROID_HOME` has build tools and a platform and a JDK is found (`JAVA_HOME`), `<target>_apk` builds and signs
+  `<output name>.apk` with the SDK's tools (no Gradle), carrying the LIBRARIES and the shared C++ runtime. The application
   reads packaged files with `android::ReadAsset` and tells which surface its graphics device uses with
   `android::AcknowledgeNativeWindow`, so the activity can let a surface go.
 - `helix_add_web_app(<executable> SHELL <html> [FILES <folder> FILES_PATH <path>])` makes the page from the template

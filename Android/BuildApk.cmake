@@ -1,5 +1,5 @@
 # Builds and signs an application's APK (cmake -P, from helix_add_android_app): Java to dex, the manifest and assets through aapt2, the dex and the
-# native library added with the JDK's jar tool, aligned and signed with a debug key made on first use.
+# native libraries added with the JDK's jar tool, aligned and signed with a debug key made on first use.
 
 function(run)
     execute_process(COMMAND ${ARGN} RESULT_VARIABLE result OUTPUT_VARIABLE out ERROR_VARIABLE err)
@@ -38,7 +38,9 @@ endif()
 # The manifest and the assets, then the dex and the library.
 set(unsigned "${stage}/unsigned.apk")
 run("${aapt2}" link -I "${ANDROID_JAR}" --manifest "${MANIFEST}" -A "${stage}/assets" -o "${unsigned}")
-file(COPY "${LIBRARY}" DESTINATION "${stage}/lib/${ABI}")
+# The application's library and the shared libraries it loads (joined with |).
+string(REPLACE "|" ";" LIBRARIES "${LIBRARIES}")
+file(COPY "${LIBRARY}" ${LIBRARIES} DESTINATION "${stage}/lib/${ABI}")
 run("${JAR}" --update --no-manifest --file "${unsigned}" -C "${stage}" classes.dex -C "${stage}" "lib/${ABI}")
 
 set(aligned "${stage}/aligned.apk")

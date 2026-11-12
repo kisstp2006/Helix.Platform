@@ -1,17 +1,36 @@
-# helix_add_android_app(<shared library target> [PACKAGE <name>] [LABEL <text>] [ASSETS <folder>] [ASSETS_PATH <path>])
+# helix_add_android_app(<shared library target> [PACKAGE <name>] [LABEL <text>] [ASSETS <folder>] [ASSETS_PATH <path>]
+#                       [PLATFORM <library target>] [LIBRARIES <shared library>...])
 #
 # Makes the shared library an Android application: the JNI glue of org.helix.platform.HelixActivity is linked into it
-# (the application defines HelixMain), and when the SDK's build tools and platform and a JDK are found, <target>_apk
-# builds <output name>.apk: the activity, the manifest, the library and the files of ASSETS under the assets' ASSETS_PATH,
-# signed with a debug key made in the build folder.
+# (the application defines HelixMain) with the platform library (PLATFORM, Helix::Platform by default; a shared library
+# holding it, such as the shared engine, for applications of several libraries), and when the SDK's build tools and
+# platform and a JDK are found, <target>_apk builds <output name>.apk: the activity, the manifest, the library, the
+# shared libraries it loads (LIBRARIES: targets or files) with the shared C++ runtime, and the files of ASSETS under the
+# assets' ASSETS_PATH, signed with a debug key made in the build folder.
 
 set(HELIX_PLATFORM_ANDROID_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE INTERNAL "")
 
 function(helix_add_android_app target)
-    cmake_parse_arguments(ARG "" "PACKAGE;LABEL;ASSETS;ASSETS_PATH" "" ${ARGN})
+    cmake_parse_arguments(ARG "" "PACKAGE;LABEL;ASSETS;ASSETS_PATH;PLATFORM" "LIBRARIES" ${ARGN})
     set(dir "${HELIX_PLATFORM_ANDROID_DIR}")
+    if(NOT ARG_PLATFORM)
+        set(ARG_PLATFORM Helix::Platform)
+    endif()
     target_sources(${target} PRIVATE "${dir}/Native/HelixActivityGlue.cpp")
-    target_link_libraries(${target} PRIVATE Helix::Platform android log)
+    target_link_libraries(${target} PRIVATE ${ARG_PLATFORM} android log)
+    set(libraries "")
+    set(library_targets "")
+    foreach(l IN LISTS ARG_LIBRARIES)
+        if(TARGET ${l})
+            list(APPEND libraries "$<TARGET_FILE:${l}>")
+            list(APPEND library_targets ${l})
+        else()
+            list(APPEND libraries "${l}")
+        endif()
+    endforeach()
+    if(HELIX_ANDROID_STL_LIBRARY)
+        list(APPEND libraries "${HELIX_ANDROID_STL_LIBRARY}")
+    endif()
     if(NOT ARG_PACKAGE)
         set(ARG_PACKAGE "org.helix.${target}")
     endif()
@@ -56,9 +75,9 @@ function(helix_add_android_app target)
         OUTPUT "${apk}"
         COMMAND "${CMAKE_COMMAND}" "-DBUILD_TOOLS=${build_tools}" "-DANDROID_JAR=${android_jar}" "-DJAVAC=${HELIX_JAVAC}" "-DJAR=${HELIX_JAR}"
                 "-DKEYTOOL=${HELIX_KEYTOOL}" "-DMANIFEST=${work}/AndroidManifest.xml" "-DJAVA_SOURCES=$<JOIN:${java_sources},|>"
-                "-DLIBRARY=$<TARGET_FILE:${target}>" "-DABI=${HELIX_ANDROID_ABI}" "-DMIN_SDK=${HELIX_ANDROID_MIN_SDK}"
+                "-DLIBRARY=$<TARGET_FILE:${target}>" "-DLIBRARIES=$<JOIN:${libraries},|>" "-DABI=${HELIX_ANDROID_ABI}" "-DMIN_SDK=${HELIX_ANDROID_MIN_SDK}"
                 "-DASSETS=${ARG_ASSETS}" "-DASSETS_PATH=${ARG_ASSETS_PATH}" "-DWORK=${work}" "-DOUTPUT=${apk}" -P "${dir}/BuildApk.cmake"
-        DEPENDS ${target} ${java_sources} "${work}/AndroidManifest.xml" "${dir}/BuildApk.cmake"
+        DEPENDS ${target} ${library_targets} ${java_sources} "${work}/AndroidManifest.xml" "${dir}/BuildApk.cmake"
         COMMENT "Packaging ${library}.apk")
     add_custom_target(${target}_apk ALL DEPENDS "${apk}")
 endfunction()
