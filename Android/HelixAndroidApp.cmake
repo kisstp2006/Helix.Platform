@@ -78,6 +78,7 @@ function(helix_add_android_app target)
                 "-DLIBRARY=$<TARGET_FILE:${target}>" "-DLIBRARIES=$<JOIN:${libraries},|>" "-DABI=${HELIX_ANDROID_ABI}" "-DMIN_SDK=${HELIX_ANDROID_MIN_SDK}"
                 "-DASSETS=${ARG_ASSETS}" "-DASSETS_PATH=${ARG_ASSETS_PATH}" "-DWORK=${work}" "-DOUTPUT=${apk}" -P "${dir}/BuildApk.cmake"
         DEPENDS ${target} ${library_targets} ${java_sources} "${work}/AndroidManifest.xml" "${dir}/BuildApk.cmake"
-        COMMENT "Packaging ${library}.apk")
+        COMMENT "Packaging ${library}.apk"
+        VERBATIM)
     add_custom_target(${target}_apk ALL DEPENDS "${apk}")
 endfunction()
