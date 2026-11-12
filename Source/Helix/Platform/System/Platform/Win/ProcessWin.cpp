@@ -1,11 +1,33 @@
 #include <Helix/Platform/System/Process.h>
 
+#include <Helix/Core/Containers/Array.h>
 #include <Helix/Core/Strings/Format.h>
 
 #include <windows.h>
 
 namespace helix::platform
 {
+    bool ReadEnvironment(StringView name, String& value)
+    {
+        wchar_t key[512];
+        int n = MultiByteToWideChar(CP_UTF8, 0, name.Data(), int(name.Size()), key, 511);
+        key[n > 0 ? n : 0] = 0;
+        DWORD size = GetEnvironmentVariableW(key, nullptr, 0);
+        if (size == 0)
+            return false;
+        Array<wchar_t> wide;
+        wide.Resize(size);
+        DWORD got = GetEnvironmentVariableW(key, wide.Data(), size);
+        if (got == 0 || got >= size)
+            return false;
+        int bytes = WideCharToMultiByte(CP_UTF8, 0, wide.Data(), int(got), nullptr, 0, nullptr, nullptr);
+        Array<char> utf8;
+        utf8.Resize(usize(bytes));
+        WideCharToMultiByte(CP_UTF8, 0, wide.Data(), int(got), utf8.Data(), bytes, nullptr, nullptr);
+        value = String(StringView(utf8.Data(), utf8.Size()));
+        return true;
+    }
+
     bool SingleInstance::Acquire(StringView name)
     {
         Release();

@@ -11,6 +11,16 @@
 
 namespace helix::platform
 {
+    bool ReadEnvironment(StringView name, String& value)
+    {
+        String key(name);
+        const char* v = getenv(key.CStr());
+        if (!v)
+            return false;
+        value = String(StringView(v));
+        return true;
+    }
+
 #if HX_PLATFORM_LINUX
     // A lock file in the temporary folder; a lock of another open of the file (another process, or this one) fails.
     bool SingleInstance::Acquire(StringView name)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Helix/Core/Strings/StringView.h>
+#include <Helix/Core/Strings/String.h>
 
 namespace helix::platform
 {
@@ -22,6 +22,9 @@ namespace helix::platform
     private:
         uptr handle_ = 0;
     };
+
+    // An environment variable of the process (UTF-8); false when it is not set.
+    bool ReadEnvironment(StringView name, String& value);
 
     bool IsDebuggerAttached();
     // Tells the process id (a message box on Windows, standard error elsewhere) and waits until a native debugger is

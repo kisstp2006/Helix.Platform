@@ -31,3 +31,10 @@ HX_TEST(Process, DebuggerAndDisplayCallsAreSafe)
     SetDisplayOrientation(DisplayOrientation::Auto);
     HX_CHECK(true);
 }
+
+HX_TEST(Process, EnvironmentVariablesAreRead)
+{
+    String value;
+    HX_CHECK(ReadEnvironment("PATH", value) && !value.Empty());
+    HX_CHECK(!ReadEnvironment("HELIX_SURELY_NOT_SET_6F1D", value));
+}
