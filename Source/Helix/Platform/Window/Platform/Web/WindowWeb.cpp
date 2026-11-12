@@ -108,6 +108,56 @@ namespace helix::platform
             NativeWindowHandle GetNativeHandle() const override { return {const_cast<char*>(selector.CStr()), nullptr}; }
             bool HasFocus() const override { return focused; }
 
+            // The canvas' CSS size follows from the pixels and the device pixel ratio.
+            void SetSize(i32 width, i32 height) override
+            {
+                if (width <= 0 || height <= 0)
+                    return;
+                f32 scale = GetContentScale();
+                emscripten_set_element_css_size(selector.CStr(), double(width) / scale, double(height) / scale);
+                emscripten_set_canvas_element_size(selector.CStr(), width, height);
+                Event e;
+                e.type = EventType::WindowResize;
+                e.resize = {i32(f32(width) / scale), i32(f32(height) / scale)};
+                pending.Push(e);
+            }
+
+            void GetPosition(i32& x, i32& y) const override
+            {
+                x = 0;
+                y = 0;
+            }
+
+            void SetPosition(i32, i32) override {}
+
+            // The browser's full screen needs a user gesture: the request waits for the next input event handler.
+            bool SetMode(WindowMode next, u32, const DisplayMode&) override
+            {
+                if (next == WindowMode::FullScreen || next == WindowMode::ExclusiveFullScreen)
+                {
+                    EmscriptenFullscreenStrategy s{};
+                    s.scaleMode = EMSCRIPTEN_FULLSCREEN_SCALE_STRETCH;
+                    s.canvasResolutionScaleMode = EMSCRIPTEN_FULLSCREEN_CANVAS_SCALE_HIDEF;
+                    s.filteringMode = EMSCRIPTEN_FULLSCREEN_FILTERING_DEFAULT;
+                    emscripten_request_fullscreen_strategy(selector.CStr(), EM_TRUE, &s);
+                    return next == WindowMode::FullScreen;
+                }
+                EmscriptenFullscreenChangeEvent status{};
+                if (emscripten_get_fullscreen_status(&status) == EMSCRIPTEN_RESULT_SUCCESS && status.isFullscreen)
+                    emscripten_exit_fullscreen();
+                return next == WindowMode::Windowed;
+            }
+
+            WindowMode GetMode() const override
+            {
+                EmscriptenFullscreenChangeEvent status{};
+                if (emscripten_get_fullscreen_status(&status) == EMSCRIPTEN_RESULT_SUCCESS && status.isFullscreen)
+                    return WindowMode::FullScreen;
+                return WindowMode::Windowed;
+            }
+
+            u32 GetDisplay() const override { return 0; }
+
             void SyncCanvasSize()
             {
                 double w = 0, h = 0;
@@ -218,6 +268,35 @@ namespace helix::platform
     }
 
     bool Window::IsSupported() { return EM_ASM_INT({ return typeof document !== 'undefined' ? 1 : 0; }) != 0; }
+
+    // One display: the browser's screen in device pixels.
+    void GetDisplays(Array<DisplayInfo>& out)
+    {
+        out.Clear();
+        if (!Window::IsSupported())
+            return;
+        f32 scale = f32(emscripten_get_device_pixel_ratio());
+        DisplayInfo d;
+        d.name = String("Browser screen");
+        d.width = i32(f32(EM_ASM_INT({ return screen.width; })) * scale);
+        d.height = i32(f32(EM_ASM_INT({ return screen.height; })) * scale);
+        d.workX = i32(f32(EM_ASM_INT({ return screen.availLeft || 0; })) * scale);
+        d.workY = i32(f32(EM_ASM_INT({ return screen.availTop || 0; })) * scale);
+        d.workWidth = i32(f32(EM_ASM_INT({ return screen.availWidth; })) * scale);
+        d.workHeight = i32(f32(EM_ASM_INT({ return screen.availHeight; })) * scale);
+        d.dpi = 96.0f * scale;
+        d.primary = true;
+        out.Push(Move(d));
+    }
+
+    void GetDisplayModes(u32 display, Array<DisplayMode>& out)
+    {
+        out.Clear();
+        Array<DisplayInfo> displays;
+        GetDisplays(displays);
+        if (display < displays.Size())
+            out.Push({displays[display].width, displays[display].height, 0, 1});
+    }
 
     Window* Window::Create(const WindowDesc& desc)
     {

@@ -97,6 +97,66 @@ namespace helix::platform
                     fn(reinterpret_cast<HANDLE>(-4));
         }
 
+        // The monitors with the primary one first (the order of GetDisplays).
+        BOOL CALLBACK CollectMonitor(HMONITOR monitor, HDC, LPRECT, LPARAM user)
+        {
+            auto& list = *reinterpret_cast<Array<HMONITOR>*>(user);
+            MONITORINFO mi{};
+            mi.cbSize = sizeof(mi);
+            GetMonitorInfoW(monitor, &mi);
+            list.Push(monitor);
+            if ((mi.dwFlags & MONITORINFOF_PRIMARY) != 0)
+                for (usize i = list.Size() - 1; i > 0; i--)
+                {
+                    HMONITOR m = list[i];
+                    list[i] = list[i - 1];
+                    list[i - 1] = m;
+                }
+            return TRUE;
+        }
+
+        void Monitors(Array<HMONITOR>& out)
+        {
+            out.Clear();
+            EnumDisplayMonitors(nullptr, nullptr, &CollectMonitor, reinterpret_cast<LPARAM>(&out));
+        }
+
+        HMONITOR MonitorAt(u32 display)
+        {
+            Array<HMONITOR> list;
+            Monitors(list);
+            if (display < list.Size())
+                return list[display];
+            return MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+        }
+
+        String Narrow(const wchar_t* wide)
+        {
+            char buffer[512];
+            int n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, buffer, sizeof(buffer), nullptr, nullptr);
+            return String(StringView(buffer, n > 0 ? usize(n - 1) : 0));
+        }
+
+        f32 MonitorDpi(HMONITOR monitor)
+        {
+            using GetDpiFn = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+            static GetDpiFn fn = []() -> GetDpiFn {
+                HMODULE shcore = LoadLibraryW(L"shcore.dll");
+                return shcore ? reinterpret_cast<GetDpiFn>(reinterpret_cast<void*>(GetProcAddress(shcore, "GetDpiForMonitor"))) : nullptr;
+            }();
+            UINT x = 96, y = 96;
+            if (fn && fn(monitor, 0, &x, &y) == S_OK)
+                return f32(x);
+            return f32(GetDpiForSystem());
+        }
+
+        bool MonitorDevice(HMONITOR monitor, MONITORINFOEXW& mi)
+        {
+            mi = {};
+            mi.cbSize = sizeof(mi);
+            return GetMonitorInfoW(monitor, &mi) != 0;
+        }
+
         class Win32Window final : public Window
         {
         public:
@@ -104,6 +164,137 @@ namespace helix::platform
             Array<Event> pending;
             WCHAR highSurrogate = 0;
             bool focused = false;
+            DWORD windowedStyle = WS_OVERLAPPEDWINDOW;
+            WindowMode mode = WindowMode::Windowed;
+            // The window's place while full screen, and the display whose mode was changed.
+            RECT windowedRect{};
+            bool haveWindowedRect = false;
+            wchar_t exclusiveDevice[CCHDEVICENAME] = {};
+
+            DWORD CurrentStyle() const { return DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE)); }
+
+            void SetSize(i32 width, i32 height) override
+            {
+                if (mode == WindowMode::FullScreen || mode == WindowMode::ExclusiveFullScreen)
+                    return;
+                if (mode == WindowMode::Maximized)
+                    SetMode(WindowMode::Windowed, 0, {});
+                RECT r{0, 0, width, height};
+                AdjustWindowRectExForDpi(&r, CurrentStyle(), FALSE, 0, GetDpiForWindow(hwnd));
+                SetWindowPos(hwnd, nullptr, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+
+            void GetPosition(i32& x, i32& y) const override
+            {
+                POINT p{0, 0};
+                ClientToScreen(hwnd, &p);
+                x = p.x;
+                y = p.y;
+            }
+
+            void SetPosition(i32 x, i32 y) override
+            {
+                if (mode != WindowMode::Windowed)
+                    return;
+                RECT window;
+                GetWindowRect(hwnd, &window);
+                POINT origin{0, 0};
+                ClientToScreen(hwnd, &origin);
+                SetWindowPos(hwnd, nullptr, x - (origin.x - window.left), y - (origin.y - window.top), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+
+            void RestoreDisplayMode()
+            {
+                if (exclusiveDevice[0])
+                {
+                    ChangeDisplaySettingsExW(exclusiveDevice, nullptr, nullptr, 0, nullptr);
+                    exclusiveDevice[0] = 0;
+                }
+            }
+
+            bool SetMode(WindowMode next, u32 display, const DisplayMode& exclusive) override
+            {
+                bool full = next == WindowMode::FullScreen || next == WindowMode::ExclusiveFullScreen;
+                bool wasFull = mode == WindowMode::FullScreen || mode == WindowMode::ExclusiveFullScreen;
+                if (!wasFull && full)
+                {
+                    WINDOWPLACEMENT wp{};
+                    wp.length = sizeof(wp);
+                    GetWindowPlacement(hwnd, &wp);
+                    windowedRect = wp.rcNormalPosition;
+                    haveWindowedRect = true;
+                }
+                RestoreDisplayMode();
+                bool ok = true;
+                if (full)
+                {
+                    HMONITOR monitor = MonitorAt(display);
+                    MONITORINFOEXW mi;
+                    MonitorDevice(monitor, mi);
+                    if (next == WindowMode::ExclusiveFullScreen)
+                    {
+                        RECT client;
+                        GetClientRect(hwnd, &client);
+                        DEVMODEW dm{};
+                        dm.dmSize = sizeof(dm);
+                        EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm);
+                        dm.dmPelsWidth = DWORD(exclusive.width > 0 ? exclusive.width : client.right - client.left);
+                        dm.dmPelsHeight = DWORD(exclusive.height > 0 ? exclusive.height : client.bottom - client.top);
+                        if (exclusive.refreshNumerator > 0)
+                            dm.dmDisplayFrequency = DWORD((exclusive.refreshNumerator + exclusive.refreshDenominator / 2) / exclusive.refreshDenominator);
+                        dm.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY;
+                        if (ChangeDisplaySettingsExW(mi.szDevice, &dm, nullptr, CDS_FULLSCREEN, nullptr) == DISP_CHANGE_SUCCESSFUL)
+                        {
+                            wcscpy_s(exclusiveDevice, mi.szDevice);
+                            MonitorDevice(monitor, mi);
+                        }
+                        else
+                        {
+                            next = WindowMode::FullScreen;
+                            ok = false;
+                        }
+                    }
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, LONG_PTR((windowedStyle & ~DWORD(WS_OVERLAPPEDWINDOW)) | WS_POPUP | (CurrentStyle() & WS_VISIBLE)));
+                    const RECT& r = mi.rcMonitor;
+                    SetWindowPos(hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_NOACTIVATE);
+                }
+                else
+                {
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, LONG_PTR(windowedStyle | (CurrentStyle() & WS_VISIBLE)));
+                    if (wasFull && haveWindowedRect)
+                    {
+                        const RECT& r = windowedRect;
+                        SetWindowPos(hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                    else
+                        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    if ((CurrentStyle() & WS_VISIBLE) != 0)
+                        ShowWindow(hwnd, next == WindowMode::Maximized ? SW_MAXIMIZE : SW_RESTORE);
+                    else if (next == WindowMode::Maximized)
+                    {
+                        // A hidden window takes the work area of its display.
+                        MONITORINFOEXW mi;
+                        MonitorDevice(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), mi);
+                        const RECT& r = mi.rcWork;
+                        SetWindowPos(hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                }
+                mode = next;
+                return ok;
+            }
+
+            WindowMode GetMode() const override { return mode; }
+
+            u32 GetDisplay() const override
+            {
+                HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                Array<HMONITOR> list;
+                Monitors(list);
+                for (u32 i = 0; i < list.Size(); i++)
+                    if (list[i] == monitor)
+                        return i;
+                return 0;
+            }
 
             void Push(Event e) { pending.Push(e); }
 
@@ -299,32 +490,135 @@ namespace helix::platform
 
     bool Window::IsSupported() { return true; }
 
+    void GetDisplays(Array<DisplayInfo>& out)
+    {
+        EnableDpiAwareness();
+        out.Clear();
+        Array<HMONITOR> list;
+        Monitors(list);
+        for (HMONITOR monitor : list)
+        {
+            MONITORINFOEXW mi;
+            if (!MonitorDevice(monitor, mi))
+                continue;
+            DisplayInfo d;
+            DISPLAY_DEVICEW dd{};
+            dd.cb = sizeof(dd);
+            d.name = EnumDisplayDevicesW(mi.szDevice, 0, &dd, 0) ? Narrow(dd.DeviceString) : Narrow(mi.szDevice);
+            d.x = mi.rcMonitor.left;
+            d.y = mi.rcMonitor.top;
+            d.width = mi.rcMonitor.right - mi.rcMonitor.left;
+            d.height = mi.rcMonitor.bottom - mi.rcMonitor.top;
+            d.workX = mi.rcWork.left;
+            d.workY = mi.rcWork.top;
+            d.workWidth = mi.rcWork.right - mi.rcWork.left;
+            d.workHeight = mi.rcWork.bottom - mi.rcWork.top;
+            DEVMODEW dm{};
+            dm.dmSize = sizeof(dm);
+            if (EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1)
+                d.refreshNumerator = dm.dmDisplayFrequency;
+            d.dpi = MonitorDpi(monitor);
+            d.primary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
+            out.Push(Move(d));
+        }
+    }
+
+    void GetDisplayModes(u32 display, Array<DisplayMode>& out)
+    {
+        out.Clear();
+        MONITORINFOEXW mi;
+        if (!MonitorDevice(MonitorAt(display), mi))
+            return;
+        DEVMODEW dm{};
+        dm.dmSize = sizeof(dm);
+        for (DWORD i = 0; EnumDisplaySettingsW(mi.szDevice, i, &dm); i++)
+        {
+            if (dm.dmBitsPerPel != 32)
+                continue;
+            DisplayMode m{i32(dm.dmPelsWidth), i32(dm.dmPelsHeight), dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0, 1};
+            bool seen = false;
+            for (const DisplayMode& o : out)
+                seen = seen || (o.width == m.width && o.height == m.height && o.refreshNumerator == m.refreshNumerator);
+            if (!seen)
+                out.Push(m);
+        }
+        if (out.Empty() && EnumDisplaySettingsW(mi.szDevice, ENUM_CURRENT_SETTINGS, &dm))
+            out.Push({i32(dm.dmPelsWidth), i32(dm.dmPelsHeight), dm.dmDisplayFrequency > 1 ? dm.dmDisplayFrequency : 0, 1});
+        // Largest first.
+        for (usize i = 1; i < out.Size(); i++)
+            for (usize j = i; j > 0; j--)
+            {
+                const DisplayMode& a = out[j - 1];
+                const DisplayMode& b = out[j];
+                bool after = i64(a.width) * a.height < i64(b.width) * b.height ||
+                             (i64(a.width) * a.height == i64(b.width) * b.height && a.refreshNumerator < b.refreshNumerator);
+                if (!after)
+                    break;
+                DisplayMode s = out[j - 1];
+                out[j - 1] = out[j];
+                out[j] = s;
+            }
+    }
+
     Window* Window::Create(const WindowDesc& desc)
     {
         EnableDpiAwareness();
         if (!RegisterWindowClass())
             return nullptr;
         auto* window = New<Win32Window>(HeapAllocator());
+        HWND parent = static_cast<HWND>(desc.parent);
         DWORD style = WS_OVERLAPPEDWINDOW;
         if (!desc.resizable)
             style &= ~DWORD(WS_THICKFRAME | WS_MAXIMIZEBOX);
-        UINT dpi = GetDpiForSystem();
-        RECT r{0, 0, LONG(MulDiv(desc.width, int(dpi), 96)), LONG(MulDiv(desc.height, int(dpi), 96))};
+        if (!desc.decorated)
+            style = WS_POPUP;
+        if (parent)
+            style = WS_CHILD | WS_CLIPSIBLINGS;
+        window->windowedStyle = style;
+        // The size is in pixels of the display the window opens on.
+        HMONITOR monitor = MonitorAt(desc.display);
+        UINT dpi = UINT(MonitorDpi(monitor));
+        i32 width = desc.width, height = desc.height;
+        if (parent)
+        {
+            RECT pr;
+            GetClientRect(parent, &pr);
+            width = pr.right - pr.left;
+            height = pr.bottom - pr.top;
+        }
+        RECT r{0, 0, LONG(width), LONG(height)};
         AdjustWindowRectExForDpi(&r, style, FALSE, 0, dpi);
+        int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
+        if (parent)
+            x = y = 0;
+        else if (desc.x != kDefaultWindowPosition && desc.y != kDefaultWindowPosition)
+        {
+            x = desc.x + r.left;
+            y = desc.y + r.top;
+        }
+        else if (desc.display != 0)
+        {
+            MONITORINFOEXW mi;
+            MonitorDevice(monitor, mi);
+            x = (mi.rcWork.left + mi.rcWork.right - (r.right - r.left)) / 2;
+            y = (mi.rcWork.top + mi.rcWork.bottom - (r.bottom - r.top)) / 2;
+        }
         wchar_t title[256];
         int n = MultiByteToWideChar(CP_UTF8, 0, desc.title.Data(), int(desc.title.Size()), title, 255);
         title[n > 0 ? n : 0] = 0;
-        HWND hwnd = CreateWindowExW(0, kClassName, title, style, CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, nullptr,
-                                    nullptr, GetModuleHandleW(nullptr), window);
+        HWND hwnd = CreateWindowExW(0, kClassName, title, style, x, y, r.right - r.left, r.bottom - r.top, parent, nullptr,
+                                    GetModuleHandleW(nullptr), window);
         if (!hwnd)
         {
             Delete(HeapAllocator(), window);
             return nullptr;
         }
         window->hwnd = hwnd;
+        if (!parent && desc.mode != WindowMode::Windowed)
+            window->SetMode(desc.mode, desc.display, desc.exclusiveMode);
         if (desc.visible)
         {
-            ShowWindow(hwnd, SW_SHOW);
+            ShowWindow(hwnd, window->mode == WindowMode::Maximized ? SW_MAXIMIZE : SW_SHOW);
             UpdateWindow(hwnd);
         }
         return window;
@@ -335,6 +629,7 @@ namespace helix::platform
         auto* w = static_cast<Win32Window*>(window);
         if (!w)
             return;
+        w->RestoreDisplayMode();
         HWND hwnd = w->hwnd;
         w->hwnd = nullptr;
         DestroyWindow(hwnd);

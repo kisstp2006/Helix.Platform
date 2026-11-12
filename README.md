@@ -21,7 +21,7 @@ dynamic libraries, windows, input events and the main loop.
 | `Source/Helix/Platform/IO/FileSystem.h` | `File`, whole file read and write, directories, listing, paths |
 | `Source/Helix/Platform/System/DynamicLibrary.h` | `DynamicLibrary` |
 | `Source/Helix/Platform/Window/Input.h` | `KeyCode` (script API values), mouse buttons, `Event` |
-| `Source/Helix/Platform/Window/Window.h` | `Window`, `RunMainLoop` |
+| `Source/Helix/Platform/Window/Window.h` | `Window` (size, position, windowed / maximized / full screen / exclusive full screen modes, no frame, embedding into a parent), the displays and their modes, `RunMainLoop` |
 | `.../<Topic>/Platform/<Os>/` | Backends (`Win`, `Linux`, `Android`, `Web`), `Posix` is shared by Linux, Android and the web |
 | `Examples/WindowDemo/WindowDemo.cpp` | Opens a window and logs every input event |
 

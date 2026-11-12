@@ -60,6 +60,17 @@ namespace helix::platform
             f32 GetContentScale() const override { return contentScale; }
             NativeWindowHandle GetNativeHandle() const override { return {android::GetNativeWindow(), nullptr}; }
             bool HasFocus() const override { return hasFocus; }
+            // The activity's surface always fills the screen.
+            void SetSize(i32, i32) override {}
+            void GetPosition(i32& x, i32& y) const override
+            {
+                x = 0;
+                y = 0;
+            }
+            void SetPosition(i32, i32) override {}
+            bool SetMode(WindowMode next, u32, const DisplayMode&) override { return next == WindowMode::FullScreen; }
+            WindowMode GetMode() const override { return WindowMode::FullScreen; }
+            u32 GetDisplay() const override { return 0; }
         };
     }
 
@@ -95,6 +106,33 @@ namespace helix::platform
     }
 
     bool Window::IsSupported() { return true; }
+
+    // One display: the surface (density from the content scale, 160 dpi at scale 1).
+    void GetDisplays(Array<DisplayInfo>& out)
+    {
+        out.Clear();
+        DisplayInfo d;
+        d.name = String("Android display");
+        {
+            ScopedLock lock(StateMutex());
+            d.width = nativeWindow ? ANativeWindow_getWidth(nativeWindow) : 0;
+            d.height = nativeWindow ? ANativeWindow_getHeight(nativeWindow) : 0;
+        }
+        d.workWidth = d.width;
+        d.workHeight = d.height;
+        d.dpi = 160.0f * contentScale;
+        d.primary = true;
+        out.Push(Move(d));
+    }
+
+    void GetDisplayModes(u32 display, Array<DisplayMode>& out)
+    {
+        out.Clear();
+        Array<DisplayInfo> displays;
+        GetDisplays(displays);
+        if (display < displays.Size())
+            out.Push({displays[display].width, displays[display].height, 0, 1});
+    }
 
     Window* Window::Create(const WindowDesc&) { return New<AndroidWindow>(HeapAllocator()); }
 

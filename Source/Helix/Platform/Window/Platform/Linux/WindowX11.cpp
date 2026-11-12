@@ -30,6 +30,13 @@ namespace helix::platform
             decltype(&XCreateColormap) CreateColormap;
             decltype(&XkbSetDetectableAutoRepeat) SetDetectableAutoRepeat;
             decltype(&XSetWMNormalHints) SetWMNormalHints;
+            decltype(&XResizeWindow) ResizeWindow;
+            decltype(&XMoveWindow) MoveWindow;
+            decltype(&XTranslateCoordinates) TranslateCoordinates;
+            decltype(&XSendEvent) SendEvent;
+            decltype(&XChangeProperty) ChangeProperty;
+            decltype(&XGetWindowProperty) GetWindowProperty;
+            decltype(&XFree) Free;
             bool loaded = false;
 
             bool Load()
@@ -55,6 +62,13 @@ namespace helix::platform
                 HX_X(GetWindowAttributes);
                 HX_X(CreateColormap);
                 HX_X(SetWMNormalHints);
+                HX_X(ResizeWindow);
+                HX_X(MoveWindow);
+                HX_X(TranslateCoordinates);
+                HX_X(SendEvent);
+                HX_X(ChangeProperty);
+                HX_X(GetWindowProperty);
+                HX_X(Free);
 #undef HX_X
                 SetDetectableAutoRepeat = library.Function<decltype(SetDetectableAutoRepeat)>("XkbSetDetectableAutoRepeat");
                 loaded = OpenDisplay && NextEvent && CreateWindow;
@@ -159,6 +173,43 @@ namespace helix::platform
             return 0;
         }
 
+        // One display: the default screen, its work area from the window manager when it tells.
+        DisplayInfo ScreenInfo(Display* display)
+        {
+            int screen = DefaultScreen(display);
+            DisplayInfo d;
+            d.name = String("X11 screen");
+            d.width = DisplayWidth(display, screen);
+            d.height = DisplayHeight(display, screen);
+            int mm = DisplayWidthMM(display, screen);
+            d.dpi = mm > 0 ? f32(d.width) * 25.4f / f32(mm) : 96.0f;
+            d.workWidth = d.width;
+            d.workHeight = d.height;
+            d.primary = true;
+            Atom workArea = x.InternAtom(display, "_NET_WORKAREA", True);
+            if (workArea != None && x.GetWindowProperty)
+            {
+                Atom type = None;
+                int format = 0;
+                unsigned long count = 0, after = 0;
+                unsigned char* data = nullptr;
+                if (x.GetWindowProperty(display, RootWindow(display, screen), workArea, 0, 4, False, AnyPropertyType, &type, &format, &count,
+                                        &after, &data) == Success && data)
+                {
+                    if (format == 32 && count >= 4)
+                    {
+                        const long* v = reinterpret_cast<const long*>(data);
+                        d.workX = i32(v[0]);
+                        d.workY = i32(v[1]);
+                        d.workWidth = i32(v[2]);
+                        d.workHeight = i32(v[3]);
+                    }
+                    x.Free(data);
+                }
+            }
+            return d;
+        }
+
         class X11Window final : public Window
         {
         public:
@@ -167,6 +218,72 @@ namespace helix::platform
             Atom deleteAtom = 0;
             i32 width = 0, height = 0;
             bool focused = false;
+            WindowMode mode = WindowMode::Windowed;
+
+            void SetSize(i32 w, i32 h) override
+            {
+                if (mode != WindowMode::Windowed || w <= 0 || h <= 0)
+                    return;
+                x.ResizeWindow(display, handle, unsigned(w), unsigned(h));
+                x.Flush(display);
+                width = w;
+                height = h;
+            }
+
+            void GetPosition(i32& px, i32& py) const override
+            {
+                int tx = 0, ty = 0;
+                ::Window child = 0;
+                x.TranslateCoordinates(display, handle, RootWindow(display, DefaultScreen(display)), 0, 0, &tx, &ty, &child);
+                px = tx;
+                py = ty;
+            }
+
+            void SetPosition(i32 px, i32 py) override
+            {
+                if (mode != WindowMode::Windowed)
+                    return;
+                x.MoveWindow(display, handle, px, py);
+                x.Flush(display);
+            }
+
+            // _NET_WM_STATE through the window manager: 1 adds, 0 removes.
+            void SendState(long action, const char* first, const char* second)
+            {
+                XEvent e{};
+                e.xclient.type = ClientMessage;
+                e.xclient.window = handle;
+                e.xclient.message_type = x.InternAtom(display, "_NET_WM_STATE", False);
+                e.xclient.format = 32;
+                e.xclient.data.l[0] = action;
+                e.xclient.data.l[1] = long(x.InternAtom(display, first, False));
+                e.xclient.data.l[2] = second ? long(x.InternAtom(display, second, False)) : 0;
+                e.xclient.data.l[3] = 1;
+                x.SendEvent(display, RootWindow(display, DefaultScreen(display)), False, SubstructureRedirectMask | SubstructureNotifyMask, &e);
+            }
+
+            bool SetMode(WindowMode next, u32, const DisplayMode&) override
+            {
+                bool ok = next != WindowMode::ExclusiveFullScreen;
+                if (next == WindowMode::ExclusiveFullScreen)
+                    next = WindowMode::FullScreen;
+                SendState(next == WindowMode::FullScreen ? 1 : 0, "_NET_WM_STATE_FULLSCREEN", nullptr);
+                SendState(next == WindowMode::Maximized ? 1 : 0, "_NET_WM_STATE_MAXIMIZED_VERT", "_NET_WM_STATE_MAXIMIZED_HORZ");
+                x.Flush(display);
+                mode = next;
+                return ok;
+            }
+
+            WindowMode GetMode() const override { return mode; }
+            u32 GetDisplay() const override { return 0; }
+
+            void SetDecorated(bool decorated)
+            {
+                // _MOTIF_WM_HINTS: flags (decorations), functions, decorations, input mode, status.
+                long hints[5] = {2, 0, decorated ? 1 : 0, 0, 0};
+                Atom atom = x.InternAtom(display, "_MOTIF_WM_HINTS", False);
+                x.ChangeProperty(display, handle, atom, atom, 32, PropModeReplace, reinterpret_cast<unsigned char*>(hints), 5);
+            }
 
             void PollEvents(Array<Event>& out) override
             {
@@ -293,6 +410,27 @@ namespace helix::platform
         return true;
     }
 
+    void GetDisplays(Array<DisplayInfo>& out)
+    {
+        out.Clear();
+        if (!x.Load())
+            return;
+        Display* d = x.OpenDisplay(nullptr);
+        if (!d)
+            return;
+        out.Push(ScreenInfo(d));
+        x.CloseDisplay(d);
+    }
+
+    void GetDisplayModes(u32 display, Array<DisplayMode>& out)
+    {
+        out.Clear();
+        Array<DisplayInfo> displays;
+        GetDisplays(displays);
+        if (display < displays.Size())
+            out.Push({displays[display].width, displays[display].height, displays[display].refreshNumerator, displays[display].refreshDenominator});
+    }
+
     Window* Window::Create(const WindowDesc& desc)
     {
         if (!x.Load())
@@ -306,7 +444,13 @@ namespace helix::platform
         attrs.event_mask = KeyPressMask | KeyReleaseMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask | StructureNotifyMask |
                            FocusChangeMask | ExposureMask;
         attrs.background_pixel = BlackPixel(display, screen);
-        ::Window handle = x.CreateWindow(display, root, 0, 0, unsigned(desc.width), unsigned(desc.height), 0, CopyFromParent, InputOutput,
+        i32 px = 0, py = 0;
+        if (desc.x != kDefaultWindowPosition && desc.y != kDefaultWindowPosition)
+        {
+            px = desc.x;
+            py = desc.y;
+        }
+        ::Window handle = x.CreateWindow(display, root, px, py, unsigned(desc.width), unsigned(desc.height), 0, CopyFromParent, InputOutput,
                                          CopyFromParent, CWEventMask | CWBackPixel, &attrs);
         if (!handle)
         {
@@ -331,8 +475,12 @@ namespace helix::platform
             x.SetWMNormalHints(display, handle, &hints);
         }
         window->SetTitle(desc.title);
+        if (!desc.decorated)
+            window->SetDecorated(false);
         if (desc.visible)
             x.MapWindow(display, handle);
+        if (desc.mode != WindowMode::Windowed)
+            window->SetMode(desc.mode, desc.display, desc.exclusiveMode);
         x.Flush(display);
         return window;
     }
