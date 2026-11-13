@@ -499,7 +499,7 @@ namespace helix::platform
         Delete(HeapAllocator(), w);
     }
 
-    void RunMainLoop(FrameFunction frame, void* user)
+    void RunMainLoop(FrameFunction frame, void* user, bool)
     {
         while (frame(user))
         {

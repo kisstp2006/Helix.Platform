@@ -73,7 +73,8 @@ namespace
 
 extern "C"
 {
-    JNIEXPORT void JNICALL Java_org_helix_platform_HelixActivity_nativeCreate(JNIEnv* env, jobject activity, jobject assets, jstring args, jfloat density)
+    JNIEXPORT void JNICALL Java_org_helix_platform_HelixActivity_nativeCreate(JNIEnv* env, jobject activity, jobject assets, jstring args, jfloat density,
+                                                                             jstring nativeLibraries, jstring files, jlong version)
     {
         Glue& g = State();
         if (g.running)
@@ -84,6 +85,13 @@ extern "C"
         g.assets = env->NewGlobalRef(assets);
         android::SetAssetManager(AAssetManager_fromJava(env, g.assets));
         android::SetContentScale(f32(density));
+        const char* libraries = nativeLibraries ? env->GetStringUTFChars(nativeLibraries, nullptr) : nullptr;
+        const char* filesText = files ? env->GetStringUTFChars(files, nullptr) : nullptr;
+        android::SetApplicationFolders(libraries ? StringView(libraries) : StringView(), filesText ? StringView(filesText) : StringView(), u64(version));
+        if (libraries)
+            env->ReleaseStringUTFChars(nativeLibraries, libraries);
+        if (filesText)
+            env->ReleaseStringUTFChars(files, filesText);
         g.args.Clear();
         const char* text = args ? env->GetStringUTFChars(args, nullptr) : nullptr;
         Split(text ? StringView(text) : StringView(), g.args);

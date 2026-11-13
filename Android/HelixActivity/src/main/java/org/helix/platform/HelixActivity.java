@@ -30,7 +30,14 @@ public class HelixActivity extends Activity implements SurfaceHolder.Callback {
         setContentView(view);
         view.requestFocus();
         String args = getIntent() != null ? getIntent().getStringExtra("args") : null;
-        nativeCreate(getAssets(), args != null ? args : "", getResources().getDisplayMetrics().density);
+        long version = 0;
+        try {
+            version = getPackageManager().getPackageInfo(getPackageName(), 0).lastUpdateTime;
+        } catch (Exception e) {
+            version = 0;
+        }
+        nativeCreate(getAssets(), args != null ? args : "", getResources().getDisplayMetrics().density,
+                     getApplicationInfo().nativeLibraryDir, getFilesDir().getAbsolutePath(), version);
     }
 
     @Override
@@ -140,7 +147,7 @@ public class HelixActivity extends Activity implements SurfaceHolder.Callback {
         });
     }
 
-    private native void nativeCreate(Object assets, String args, float density);
+    private native void nativeCreate(Object assets, String args, float density, String nativeLibraries, String files, long version);
     private native void nativeSurface(Object surface);
     private native void nativeFocus(boolean focused);
     private native void nativeTouch(int action, int id, float x, float y);

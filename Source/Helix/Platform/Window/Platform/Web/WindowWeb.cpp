@@ -358,10 +358,10 @@ namespace helix::platform
         Delete(HeapAllocator(), static_cast<WebWindow*>(window));
     }
 
-    void RunMainLoop(FrameFunction frame, void* user)
+    void RunMainLoop(FrameFunction frame, void* user, bool returnAtOnce)
     {
         static LoopState state;
         state = {frame, user};
-        emscripten_set_main_loop_arg(&LoopTick, &state, 0, true);
+        emscripten_set_main_loop_arg(&LoopTick, &state, 0, !returnAtOnce);
     }
 }

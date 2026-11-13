@@ -1,4 +1,6 @@
 #include <Helix/Platform/Window/Android.h>
+#include <Helix/Core/Strings/Format.h>
+#include <Helix/Platform/IO/FileSystem.h>
 #include <Helix/Platform/Threading/Thread.h>
 #include <Helix/Platform/Window/Window.h>
 
@@ -117,6 +119,8 @@ namespace helix::platform
         JavaVM* javaVm = nullptr;
         jobject activityObject = nullptr;
         AAssetManager* assetManager = nullptr;
+        String nativeLibraryFolder, filesFolder;
+        u64 installedVersion = 0;
         thread_local JNIEnv* threadEnv = nullptr;
         std::atomic<ANativeWindow*> usedWindow{nullptr};
 
@@ -217,6 +221,50 @@ namespace helix::platform
             return ok;
         }
 
+        void SetApplicationFolders(StringView nativeLibraries, StringView files, u64 packageVersion)
+        {
+            nativeLibraryFolder = String(nativeLibraries);
+            filesFolder = String(files);
+            installedVersion = packageVersion;
+        }
+
+        StringView NativeLibraryDirectory() { return nativeLibraryFolder; }
+        StringView FilesDirectory() { return filesFolder; }
+
+        bool ListAssets(StringView folder, Array<String>& out)
+        {
+            out.Clear();
+            if (!assetManager)
+                return false;
+            String name(folder);
+            AAssetDir* dir = AAssetManager_openDir(assetManager, name.CStr());
+            if (!dir)
+                return false;
+            while (const char* file = AAssetDir_getNextFileName(dir))
+                out.Push(String(StringView(file)));
+            AAssetDir_close(dir);
+            return !out.Empty();
+        }
+
+        bool ExtractAssets(StringView folder, StringView destination)
+        {
+            String stamp = JoinPath(destination, ".helix-extracted");
+            String version = Format("{}", installedVersion);
+            Array<u8> existing;
+            if (installedVersion != 0 && ReadFile(stamp, existing) && StringView(reinterpret_cast<const char*>(existing.Data()), existing.Size()) == version.View())
+                return true;
+            Array<String> files;
+            ListAssets(folder, files);
+            CreateDirectories(destination);
+            Array<u8> bytes;
+            for (const String& file : files)
+            {
+                if (!ReadAsset(JoinPath(folder, file), bytes) || !WriteFile(JoinPath(destination, file), Span<const u8>(bytes.Data(), bytes.Size())))
+                    return false;
+            }
+            return WriteFile(stamp, Span<const u8>(reinterpret_cast<const u8*>(version.Data()), version.Size()));
+        }
+
         void AcknowledgeNativeWindow(ANativeWindow* window) { usedWindow.store(window); }
 
         void FinishActivity() { CallActivity("finishFromNative", "()V", jvalue{}, false); }
@@ -253,7 +301,7 @@ namespace helix::platform
 
     void Window::Destroy(Window* window) { Delete(HeapAllocator(), static_cast<AndroidWindow*>(window)); }
 
-    void RunMainLoop(FrameFunction frame, void* user)
+    void RunMainLoop(FrameFunction frame, void* user, bool)
     {
         while (frame(user))
         {

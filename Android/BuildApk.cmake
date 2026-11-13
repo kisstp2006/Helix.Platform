@@ -30,10 +30,21 @@ run("${JAVAC}" --release 11 -classpath "${ANDROID_JAR}" -d "${stage}/classes" ${
 file(GLOB_RECURSE classes "${stage}/classes/*.class")
 run("${d8}" --min-api "${MIN_SDK}" --lib "${ANDROID_JAR}" --output "${stage}" ${classes})
 
-# A folder of files as the assets' ASSETS_PATH (their root when empty).
+# A folder of files as the assets' ASSETS_PATH (their root when empty), and more folders as <folder>=<path> (joined
+# with |).
 if(ASSETS AND EXISTS "${ASSETS}")
     file(COPY "${ASSETS}/" DESTINATION "${stage}/assets/${ASSETS_PATH}")
 endif()
+string(REPLACE "|" ";" MORE_ASSETS "${MORE_ASSETS}")
+foreach(entry IN LISTS MORE_ASSETS)
+    if(entry MATCHES "^(.*)=([^=]*)$")
+        set(folder "${CMAKE_MATCH_1}")
+        set(path "${CMAKE_MATCH_2}")
+        if(EXISTS "${folder}")
+            file(COPY "${folder}/" DESTINATION "${stage}/assets/${path}")
+        endif()
+    endif()
+endforeach()
 
 # The manifest and the assets, then the dex and the library.
 set(unsigned "${stage}/unsigned.apk")

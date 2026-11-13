@@ -119,6 +119,8 @@ namespace helix::platform
 
     using FrameFunction = bool (*)(void* user);
 
-    // Native platforms loop until the frame function returns false, the web yields to the browser each frame.
-    void RunMainLoop(FrameFunction frame, void* user);
+    // Native platforms loop until the frame function returns false, the web yields to the browser each frame. On the
+    // Web the call does not return (main ends there) unless returnAtOnce: then it returns and the caller returns from
+    // main (a program whose main was called by managed code, which must not be unwound).
+    void RunMainLoop(FrameFunction frame, void* user, bool returnAtOnce = false);
 }
