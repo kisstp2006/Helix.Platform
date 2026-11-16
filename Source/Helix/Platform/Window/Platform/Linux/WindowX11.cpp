@@ -329,16 +329,16 @@ namespace helix::platform
                 return true;
             }
 
-            bool SetCursorImage(Span<const u8> rgba, u32 width, u32 height, i32 hotspotX, i32 hotspotY) override
+            bool SetCursorImage(Span<const u8> rgba, u32 imageWidth, u32 imageHeight, i32 hotspotX, i32 hotspotY) override
             {
-                if (width == 0 || height == 0 || rgba.Size() < usize(width) * height * 4 || !xcursor.Load())
+                if (imageWidth == 0 || imageHeight == 0 || rgba.Size() < usize(imageWidth) * imageHeight * 4 || !xcursor.Load())
                     return false;
-                XcursorImageData* image = xcursor.ImageCreate(int(width), int(height));
+                XcursorImageData* image = xcursor.ImageCreate(int(imageWidth), int(imageHeight));
                 if (!image)
                     return false;
                 image->xhot = unsigned(hotspotX < 0 ? 0 : hotspotX);
                 image->yhot = unsigned(hotspotY < 0 ? 0 : hotspotY);
-                for (usize i = 0; i < usize(width) * height; i++)
+                for (usize i = 0; i < usize(imageWidth) * imageHeight; i++)
                 {
                     u32 a = rgba[i * 4 + 3];
                     u32 r = rgba[i * 4 + 0] * a / 255, g = rgba[i * 4 + 1] * a / 255, b = rgba[i * 4 + 2] * a / 255;
