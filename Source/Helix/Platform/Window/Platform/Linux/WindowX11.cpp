@@ -52,6 +52,10 @@ namespace helix::platform
             decltype(&XVaCreateNestedList) VaCreateNestedList;
             decltype(&XFilterEvent) FilterEvent;
             decltype(&Xutf8LookupString) Utf8LookupString;
+            // Cursors.
+            decltype(&XCreateFontCursor) CreateFontCursor;
+            decltype(&XDefineCursor) DefineCursor;
+            decltype(&XFreeCursor) FreeCursor;
             bool loaded = false;
 
             bool HasInputMethod() const
@@ -100,6 +104,9 @@ namespace helix::platform
                 HX_X(SetICValues);
                 HX_X(VaCreateNestedList);
                 HX_X(FilterEvent);
+                HX_X(CreateFontCursor);
+                HX_X(DefineCursor);
+                HX_X(FreeCursor);
 #undef HX_X
                 Utf8LookupString = library.Function<decltype(Utf8LookupString)>("Xutf8LookupString");
                 SetDetectableAutoRepeat = library.Function<decltype(SetDetectableAutoRepeat)>("XkbSetDetectableAutoRepeat");
@@ -109,6 +116,39 @@ namespace helix::platform
         };
 
         Xlib x;
+
+        // libXcursor's image cursors (optional), declared as its ABI is: premultiplied ARGB pixels.
+        struct XcursorImageData
+        {
+            unsigned int version, size, width, height, xhot, yhot, delay;
+            unsigned int* pixels;
+        };
+
+        struct Xcursor
+        {
+            DynamicLibrary library;
+            XcursorImageData* (*ImageCreate)(int width, int height) = nullptr;
+            void (*ImageDestroy)(XcursorImageData* image) = nullptr;
+            Cursor (*ImageLoadCursor)(Display* display, const XcursorImageData* image) = nullptr;
+            bool tried = false;
+
+            bool Load()
+            {
+                if (!tried)
+                {
+                    tried = true;
+                    if (library.Open("libXcursor.so.1") || library.Open("libXcursor.so"))
+                    {
+                        ImageCreate = library.Function<decltype(ImageCreate)>("XcursorImageCreate");
+                        ImageDestroy = library.Function<decltype(ImageDestroy)>("XcursorImageDestroy");
+                        ImageLoadCursor = library.Function<decltype(ImageLoadCursor)>("XcursorImageLoadCursor");
+                    }
+                }
+                return ImageCreate && ImageDestroy && ImageLoadCursor;
+            }
+        };
+
+        Xcursor xcursor;
 
         KeyCode TranslateKeysym(KeySym s)
         {
@@ -261,6 +301,56 @@ namespace helix::platform
             XIC ic = nullptr;
             bool spot = false;
             bool textInput = false;
+            // The cursor the window shows (0: the parent's, the default arrow).
+            Cursor pointer = 0;
+
+            void UseCursor(Cursor c)
+            {
+                if (!x.DefineCursor)
+                    return;
+                x.DefineCursor(display, handle, c);
+                if (pointer && x.FreeCursor)
+                    x.FreeCursor(display, pointer);
+                pointer = c;
+                x.Flush(display);
+            }
+
+            bool SetCursor(SystemCursor shape) override
+            {
+                // The cursor font's shapes: left_ptr, xterm, hand2, sb_v_double_arrow, sb_h_double_arrow,
+                // top_right_corner, top_left_corner, fleur, X_cursor, watch, crosshair.
+                static const unsigned kShapes[] = {68, 152, 60, 116, 108, 136, 134, 52, 0, 150, 34};
+                if (!x.CreateFontCursor)
+                    return false;
+                Cursor c = x.CreateFontCursor(display, kShapes[u32(shape) < 11 ? u32(shape) : 0]);
+                if (!c)
+                    return false;
+                UseCursor(c);
+                return true;
+            }
+
+            bool SetCursorImage(Span<const u8> rgba, u32 width, u32 height, i32 hotspotX, i32 hotspotY) override
+            {
+                if (width == 0 || height == 0 || rgba.Size() < usize(width) * height * 4 || !xcursor.Load())
+                    return false;
+                XcursorImageData* image = xcursor.ImageCreate(int(width), int(height));
+                if (!image)
+                    return false;
+                image->xhot = unsigned(hotspotX < 0 ? 0 : hotspotX);
+                image->yhot = unsigned(hotspotY < 0 ? 0 : hotspotY);
+                for (usize i = 0; i < usize(width) * height; i++)
+                {
+                    u32 a = rgba[i * 4 + 3];
+                    u32 r = rgba[i * 4 + 0] * a / 255, g = rgba[i * 4 + 1] * a / 255, b = rgba[i * 4 + 2] * a / 255;
+                    image->pixels[i] = a << 24 | r << 16 | g << 8 | b;
+                }
+                Cursor c = xcursor.ImageLoadCursor(display, image);
+                xcursor.ImageDestroy(image);
+                if (!c)
+                    return false;
+                UseCursor(c);
+                return true;
+            }
 
             void OpenInputMethod()
             {
@@ -608,6 +698,8 @@ namespace helix::platform
         if (!w)
             return;
         w->CloseInputMethod();
+        if (w->pointer && x.FreeCursor)
+            x.FreeCursor(w->display, w->pointer);
         x.DestroyWindow(w->display, w->handle);
         x.CloseDisplay(w->display);
         Delete(HeapAllocator(), w);

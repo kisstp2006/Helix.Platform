@@ -66,6 +66,37 @@ HX_TEST(Window, TextInputTurnsOnAndOffWithNothingComposed)
     Window::Destroy(w);
 }
 
+HX_TEST(Window, CursorsAreSystemShapesOrImages)
+{
+#if HX_PLATFORM_ANDROID
+    return;
+#endif
+    if (!Window::IsSupported())
+        return;
+    Window* w = Window::Create({.title = "helix cursors", .width = 320, .height = 200, .visible = true});
+    HX_REQUIRE(w != nullptr);
+    for (u8 shape = 0; shape <= u8(SystemCursor::Crosshair); shape++)
+        HX_CHECK(w->SetCursor(SystemCursor(shape)));
+    // A 16 pixel arrow of an image with its hotspot at the tip (X11 makes one only with libXcursor).
+    Array<u8> pixels;
+    for (u32 y = 0; y < 16; y++)
+        for (u32 x = 0; x < 16; x++)
+        {
+            bool inside = x <= y;
+            pixels.Push(255), pixels.Push(inside ? 255 : 0), pixels.Push(0), pixels.Push(inside ? 255 : 0);
+        }
+    bool image = w->SetCursorImage(Span<const u8>(pixels.Data(), pixels.Size()), 16, 16, 0, 0);
+#if HX_PLATFORM_WINDOWS || HX_PLATFORM_WEB
+    HX_CHECK(image);
+#else
+    (void)image;
+#endif
+    // Too few pixels: refused, nothing changes.
+    HX_CHECK(!w->SetCursorImage(Span<const u8>(pixels.Data(), 8), 16, 16, 0, 0));
+    HX_CHECK(w->SetCursor(SystemCursor::Arrow));
+    Window::Destroy(w);
+}
+
 HX_TEST(Window, DisplaysAreListedWithThePrimaryFirst)
 {
 #if HX_PLATFORM_ANDROID

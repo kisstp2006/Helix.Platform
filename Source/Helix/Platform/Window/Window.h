@@ -80,6 +80,23 @@ namespace helix::platform
         StringView canvasSelector = "#canvas";
     };
 
+    // The pointer shapes the system draws.
+    enum class SystemCursor : u8
+    {
+        Arrow,
+        Text,
+        Hand,
+        ResizeVertical,
+        ResizeHorizontal,
+        // Up to the right (and down to the left), up to the left (and down to the right).
+        ResizeDiagonalUp,
+        ResizeDiagonalDown,
+        Move,
+        NotAllowed,
+        Wait,
+        Crosshair,
+    };
+
     struct NativeWindowHandle
     {
         void* window = nullptr;
@@ -119,6 +136,19 @@ namespace helix::platform
         virtual void SetTextInput(bool on, i32 caretX, i32 caretY, i32 caretHeight)
         {
             (void)on, (void)caretX, (void)caretY, (void)caretHeight;
+        }
+        // The pointer over the window's client area: a system shape, or an image (RGBA8, rows from the top, straight
+        // alpha) with its hotspot (pixels from its top left). False where the platform cannot (no pointer on Android;
+        // X11 images need libXcursor), the pointer staying as it was.
+        virtual bool SetCursor(SystemCursor shape)
+        {
+            (void)shape;
+            return false;
+        }
+        virtual bool SetCursorImage(Span<const u8> rgba, u32 width, u32 height, i32 hotspotX, i32 hotspotY)
+        {
+            (void)rgba, (void)width, (void)height, (void)hotspotX, (void)hotspotY;
+            return false;
         }
         // The text being composed (codepoints), empty when nothing is; changes come as Composition events.
         Span<const u32> Composition() const { return Span<const u32>(composition_.Data(), composition_.Size()); }

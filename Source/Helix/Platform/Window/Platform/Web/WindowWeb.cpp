@@ -29,6 +29,31 @@ EM_JS(void, helix_web_lock_orientation, (int orientation), {
     screen.orientation.lock(names[orientation] || "any").catch(function() {});
 });
 
+// The pointer over the canvas: a CSS cursor name, or an image (RGBA8 rows from the top) as a data URL with its
+// hotspot.
+EM_JS(void, helix_web_cursor, (const char* selector, const char* name), {
+    var canvas = document.querySelector(UTF8ToString(selector));
+    if (canvas)
+        canvas.style.cursor = UTF8ToString(name);
+});
+
+EM_JS(int, helix_web_cursor_image, (const char* selector, const unsigned char* rgba, int width, int height, int x, int y), {
+    var canvas = document.querySelector(UTF8ToString(selector));
+    if (!canvas)
+        return 0;
+    var image = document.createElement('canvas');
+    image.width = width;
+    image.height = height;
+    var context = image.getContext('2d');
+    if (!context)
+        return 0;
+    var data = context.createImageData(width, height);
+    data.data.set(HEAPU8.subarray(rgba, rgba + width * height * 4));
+    context.putImageData(data, 0, 0);
+    canvas.style.cursor = 'url(' + image.toDataURL() + ') ' + x + ' ' + y + ', auto';
+    return 1;
+});
+
 // Text input: a hidden text area at the caret takes the keys while it is on, so the browser's input method can compose
 // into it. What it gets waits in a queue the window reads each frame: entries of kind (1 the composition, 2 committed
 // text), cursor, count and that many codepoints.
@@ -181,6 +206,21 @@ namespace helix::platform
             Array<Event> pending;
             bool focused = true;
             bool textInput = false;
+
+            bool SetCursor(SystemCursor shape) override
+            {
+                static const char* const kNames[] = {"default",    "text",        "pointer",     "ns-resize", "ew-resize", "nesw-resize",
+                                                     "nwse-resize", "move",       "not-allowed", "wait",      "crosshair"};
+                helix_web_cursor(selector.CStr(), kNames[u32(shape) < 11 ? u32(shape) : 0]);
+                return true;
+            }
+
+            bool SetCursorImage(Span<const u8> rgba, u32 width, u32 height, i32 hotspotX, i32 hotspotY) override
+            {
+                if (width == 0 || height == 0 || rgba.Size() < usize(width) * height * 4)
+                    return false;
+                return helix_web_cursor_image(selector.CStr(), rgba.Data(), int(width), int(height), hotspotX, hotspotY) != 0;
+            }
 
             void SetTextInput(bool on, i32 caretX, i32 caretY, i32 caretHeight) override
             {

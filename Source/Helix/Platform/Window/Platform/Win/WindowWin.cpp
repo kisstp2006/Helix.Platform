@@ -196,6 +196,9 @@ namespace helix::platform
             WCHAR highSurrogate = 0;
             bool focused = false;
             bool textInput = false;
+            // The pointer over the client area, and the one made of an image (destroyed when replaced).
+            HCURSOR pointer = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+            HCURSOR imageCursor = nullptr;
             DWORD windowedStyle = WS_OVERLAPPEDWINDOW;
             WindowMode mode = WindowMode::Windowed;
             // The window's place while full screen, and the display whose mode was changed.
@@ -377,6 +380,89 @@ namespace helix::platform
                 }
             }
 
+            // Shows the cursor now when the pointer is over the client area (else WM_SETCURSOR does when it comes).
+            void ApplyCursor()
+            {
+                POINT p;
+                if (!GetCursorPos(&p) || WindowFromPoint(p) != hwnd)
+                    return;
+                POINT c = p;
+                RECT r;
+                if (ScreenToClient(hwnd, &c) && GetClientRect(hwnd, &r) && PtInRect(&r, c))
+                    ::SetCursor(pointer);
+            }
+
+            void ReleaseImageCursor()
+            {
+                if (imageCursor)
+                    DestroyIcon(imageCursor);
+                imageCursor = nullptr;
+            }
+
+            bool SetCursor(SystemCursor shape) override
+            {
+                // IDC_ARROW, IDC_IBEAM, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDC_SIZENESW, IDC_SIZENWSE, IDC_SIZEALL, IDC_NO,
+                // IDC_WAIT, IDC_CROSS.
+                static const WORD kIds[] = {32512, 32513, 32649, 32645, 32644, 32643, 32642, 32646, 32648, 32514, 32515};
+                HCURSOR c = LoadCursorW(nullptr, MAKEINTRESOURCEW(kIds[u32(shape) < 11 ? u32(shape) : 0]));
+                if (!c)
+                    return false;
+                ReleaseImageCursor();
+                pointer = c;
+                ApplyCursor();
+                return true;
+            }
+
+            bool SetCursorImage(Span<const u8> rgba, u32 width, u32 height, i32 hotspotX, i32 hotspotY) override
+            {
+                if (width == 0 || height == 0 || rgba.Size() < usize(width) * height * 4)
+                    return false;
+                // A 32 bit color bitmap (BGRA, its alpha used) and an empty mask.
+                BITMAPV5HEADER h{};
+                h.bV5Size = sizeof(h);
+                h.bV5Width = LONG(width);
+                h.bV5Height = -LONG(height);
+                h.bV5Planes = 1;
+                h.bV5BitCount = 32;
+                h.bV5Compression = BI_BITFIELDS;
+                h.bV5RedMask = 0x00FF0000;
+                h.bV5GreenMask = 0x0000FF00;
+                h.bV5BlueMask = 0x000000FF;
+                h.bV5AlphaMask = 0xFF000000;
+                void* bits = nullptr;
+                HDC dc = GetDC(nullptr);
+                HBITMAP color = CreateDIBSection(dc, reinterpret_cast<BITMAPINFO*>(&h), DIB_RGB_COLORS, &bits, nullptr, 0);
+                ReleaseDC(nullptr, dc);
+                if (!color || !bits)
+                    return false;
+                u8* out = static_cast<u8*>(bits);
+                for (usize i = 0; i < usize(width) * height; i++)
+                {
+                    out[i * 4 + 0] = rgba[i * 4 + 2];
+                    out[i * 4 + 1] = rgba[i * 4 + 1];
+                    out[i * 4 + 2] = rgba[i * 4 + 0];
+                    out[i * 4 + 3] = rgba[i * 4 + 3];
+                }
+                HBITMAP mask = CreateBitmap(i32(width), i32(height), 1, 1, nullptr);
+                ICONINFO info{};
+                info.fIcon = FALSE;
+                info.xHotspot = DWORD(hotspotX < 0 ? 0 : hotspotX);
+                info.yHotspot = DWORD(hotspotY < 0 ? 0 : hotspotY);
+                info.hbmMask = mask;
+                info.hbmColor = color;
+                HCURSOR made = HCURSOR(CreateIconIndirect(&info));
+                DeleteObject(color);
+                if (mask)
+                    DeleteObject(mask);
+                if (!made)
+                    return false;
+                ReleaseImageCursor();
+                imageCursor = made;
+                pointer = made;
+                ApplyCursor();
+                return true;
+            }
+
             void PollEvents(Array<Event>& out) override
             {
                 MSG msg;
@@ -438,6 +524,14 @@ namespace helix::platform
                     closeRequested_ = true;
                     Push(e);
                     return 0;
+                case WM_SETCURSOR:
+                    // The client area shows the window's cursor; the frame's edges keep the system's.
+                    if (LOWORD(lp) == HTCLIENT)
+                    {
+                        ::SetCursor(pointer);
+                        return TRUE;
+                    }
+                    break;
                 case WM_SIZE:
                     e.type = EventType::WindowResize;
                     e.resize = {LOWORD(lp), HIWORD(lp)};
@@ -763,6 +857,7 @@ namespace helix::platform
         if (!w)
             return;
         w->RestoreDisplayMode();
+        w->ReleaseImageCursor();
         HWND hwnd = w->hwnd;
         w->hwnd = nullptr;
         DestroyWindow(hwnd);
