@@ -1,10 +1,12 @@
 #pragma once
 
+#include <Helix/Core/Basics/Tags.h>
 #include <Helix/Core/Basics/Types.h>
 
 namespace helix::platform
 {
-    // Values follow the script API KeyCode enumeration.
+    // Values follow the script API KeyCode enumeration (the script API's KeyCode is this one).
+    HX_ENUM(Namespace = "HelixEngine")
     enum class KeyCode : u16
     {
         None = 0,
