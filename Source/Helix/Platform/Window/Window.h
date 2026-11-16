@@ -113,8 +113,19 @@ namespace helix::platform
         virtual u32 GetDisplay() const = 0;
         bool CloseRequested() const { return closeRequested_; }
 
+        // Text input through the system's input method (IME): while on, keys may compose text, which the caller shows
+        // at its caret (client pixels from the top left, the caret's top and height), where the candidate window
+        // goes. Off when the window opens; platforms without an input method ignore it.
+        virtual void SetTextInput(bool on, i32 caretX, i32 caretY, i32 caretHeight)
+        {
+            (void)on, (void)caretX, (void)caretY, (void)caretHeight;
+        }
+        // The text being composed (codepoints), empty when nothing is; changes come as Composition events.
+        Span<const u32> Composition() const { return Span<const u32>(composition_.Data(), composition_.Size()); }
+
     protected:
         bool closeRequested_ = false;
+        Array<u32> composition_;
     };
 
     using FrameFunction = bool (*)(void* user);

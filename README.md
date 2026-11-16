@@ -7,10 +7,10 @@ dynamic libraries, windows, input events and the main loop.
 
 | Platform | Window and input | Threads, time, files |
 |---|---|---|
-| Windows | Win32, per-monitor DPI v2, UTF-16 text input | Win32 threads, SRW locks, high resolution waitable timers |
-| Linux | X11, libX11 is loaded at runtime | pthreads, `clock_gettime` |
+| Windows | Win32, per-monitor DPI v2, UTF-16 text input, IME through IMM32 (composition and candidates) | Win32 threads, SRW locks, high resolution waitable timers |
+| Linux | X11, libX11 is loaded at runtime; UTF-8 text and input methods through XIM | pthreads, `clock_gettime` |
 | Android | `ANativeWindow`, input and focus fed by the activity in `Android/` (Java and its JNI glue) through `Helix/Platform/Window/Android.h`; the APK's assets | pthreads |
-| Web | Canvas and DOM events through the Emscripten HTML5 API, `requestAnimationFrame` main loop | Single threaded unless built with pthreads |
+| Web | Canvas and DOM events through the Emscripten HTML5 API, a hidden text area for input methods while text input is on, `requestAnimationFrame` main loop | Single threaded unless built with pthreads |
 
 ## Layout
 
@@ -21,8 +21,8 @@ dynamic libraries, windows, input events and the main loop.
 | `Source/Helix/Platform/IO/FileSystem.h` | `File`, whole file read and write, directories, listing, paths |
 | `Source/Helix/Platform/System/DynamicLibrary.h` | `DynamicLibrary` |
 | `Source/Helix/Platform/System/Process.h` | `SingleInstance`, `IsDebuggerAttached`, `WaitForNativeDebugger` |
-| `Source/Helix/Platform/Window/Input.h` | `KeyCode` (script API values), mouse buttons, `Event` |
-| `Source/Helix/Platform/Window/Window.h` | `Window` (size, position, windowed / maximized / full screen / exclusive full screen modes, no frame, embedding into a parent), the displays and their modes, `SetKeepScreenOn`, `SetDisplayOrientation`, `RunMainLoop` |
+| `Source/Helix/Platform/Window/Input.h` | `KeyCode` (script API values), mouse buttons, `Event` (keys, text, mouse and touches in the framebuffer's pixels, wheel, the composition of an input method) |
+| `Source/Helix/Platform/Window/Window.h` | `Window` (size, position, windowed / maximized / full screen / exclusive full screen modes, no frame, embedding into a parent, text input with the input method's composition and candidates at a caret), the displays and their modes, `SetKeepScreenOn`, `SetDisplayOrientation`, `RunMainLoop` |
 | `.../<Topic>/Platform/<Os>/` | Backends (`Win`, `Linux`, `Android`, `Web`), `Posix` is shared by Linux, Android and the web |
 | `Examples/WindowDemo/WindowDemo.cpp` | Opens a window and logs every input event (an APK on Android, a page on the Web) |
 | `Android/` | `HelixActivity` (Java), its JNI glue (`Native/`), the manifest template, `helix_add_android_app` |

@@ -4,6 +4,8 @@
 #include <windows.h>
 #include <windowsx.h>
 
+#include <imm.h>
+
 namespace helix::platform
 {
     namespace
@@ -150,6 +152,35 @@ namespace helix::platform
             return f32(GetDpiForSystem());
         }
 
+        // UTF-16 to codepoints; `unit` (a place in the UTF-16) becomes the codepoint index there.
+        void Codepoints(const WCHAR* text, i32 count, Array<u32>& out, i32& unit)
+        {
+            out.Clear();
+            i32 at = -1;
+            for (i32 i = 0; i < count; i++)
+            {
+                if (i == unit)
+                    at = i32(out.Size());
+                u32 c = text[i];
+                if (c >= 0xD800 && c <= 0xDBFF && i + 1 < count && text[i + 1] >= 0xDC00 && text[i + 1] <= 0xDFFF)
+                {
+                    c = 0x10000 + ((c - 0xD800) << 10) + (u32(text[i + 1]) - 0xDC00);
+                    i++;
+                }
+                out.Push(c);
+            }
+            unit = at >= 0 ? at : i32(out.Size());
+        }
+
+        // A string of the input method's context.
+        void CompositionString(HIMC imc, DWORD which, Array<WCHAR>& out)
+        {
+            LONG bytes = ImmGetCompositionStringW(imc, which, nullptr, 0);
+            out.Resize(bytes > 0 ? usize(bytes) / sizeof(WCHAR) : 0);
+            if (bytes > 0)
+                ImmGetCompositionStringW(imc, which, out.Data(), DWORD(bytes));
+        }
+
         bool MonitorDevice(HMONITOR monitor, MONITORINFOEXW& mi)
         {
             mi = {};
@@ -164,6 +195,7 @@ namespace helix::platform
             Array<Event> pending;
             WCHAR highSurrogate = 0;
             bool focused = false;
+            bool textInput = false;
             DWORD windowedStyle = WS_OVERLAPPEDWINDOW;
             WindowMode mode = WindowMode::Windowed;
             // The window's place while full screen, and the display whose mode was changed.
@@ -305,6 +337,46 @@ namespace helix::platform
 
             void Push(Event e) { pending.Push(e); }
 
+            void PushComposition(i32 cursor)
+            {
+                Event e;
+                e.type = EventType::Composition;
+                e.composition = {cursor};
+                Push(e);
+            }
+
+            void SetTextInput(bool on, i32 caretX, i32 caretY, i32 caretHeight) override
+            {
+                if (on != textInput)
+                {
+                    // Without a context the input method is off.
+                    ImmAssociateContextEx(hwnd, nullptr, on ? IACE_DEFAULT : 0);
+                    textInput = on;
+                    if (!on && !composition_.Empty())
+                    {
+                        composition_.Clear();
+                        PushComposition(0);
+                    }
+                }
+                if (!on)
+                    return;
+                if (HIMC imc = ImmGetContext(hwnd))
+                {
+                    COMPOSITIONFORM place{};
+                    place.dwStyle = CFS_POINT;
+                    place.ptCurrentPos = {caretX, caretY};
+                    ImmSetCompositionWindow(imc, &place);
+                    // The candidates next to the caret, never over it.
+                    CANDIDATEFORM candidates{};
+                    candidates.dwIndex = 0;
+                    candidates.dwStyle = CFS_EXCLUDE;
+                    candidates.ptCurrentPos = {caretX, caretY + caretHeight};
+                    candidates.rcArea = {caretX, caretY, caretX + 1, caretY + caretHeight};
+                    ImmSetCandidateWindow(imc, &candidates);
+                    ImmReleaseContext(hwnd, imc);
+                }
+            }
+
             void PollEvents(Array<Event>& out) override
             {
                 MSG msg;
@@ -411,6 +483,55 @@ namespace helix::platform
                     }
                     return 0;
                 }
+                case WM_IME_SETCONTEXT:
+                    // The caller draws the composed text: the system shows only its candidates.
+                    lp &= ~LPARAM(ISC_SHOWUICOMPOSITIONWINDOW);
+                    break;
+                case WM_IME_STARTCOMPOSITION:
+                    return 0;
+                case WM_IME_COMPOSITION:
+                {
+                    HIMC imc = ImmGetContext(hwnd);
+                    if (!imc)
+                        break;
+                    Array<WCHAR> text;
+                    Array<u32> codepoints;
+                    if (lp & GCS_RESULTSTR)
+                    {
+                        CompositionString(imc, GCS_RESULTSTR, text);
+                        i32 none = -1;
+                        Codepoints(text.Data(), i32(text.Size()), codepoints, none);
+                        for (u32 cp : codepoints)
+                        {
+                            Event t;
+                            t.type = EventType::Text;
+                            t.modifiers = e.modifiers;
+                            t.text = {cp};
+                            Push(t);
+                        }
+                    }
+                    if (lp & GCS_COMPSTR)
+                    {
+                        CompositionString(imc, GCS_COMPSTR, text);
+                        i32 cursor = (lp & GCS_CURSORPOS) ? i32(ImmGetCompositionStringW(imc, GCS_CURSORPOS, nullptr, 0) & 0xFFFF) : i32(text.Size());
+                        Codepoints(text.Data(), i32(text.Size()), composition_, cursor);
+                        PushComposition(cursor);
+                    }
+                    else if ((lp & GCS_RESULTSTR) && !composition_.Empty())
+                    {
+                        composition_.Clear();
+                        PushComposition(0);
+                    }
+                    ImmReleaseContext(hwnd, imc);
+                    return 0;
+                }
+                case WM_IME_ENDCOMPOSITION:
+                    if (!composition_.Empty())
+                    {
+                        composition_.Clear();
+                        PushComposition(0);
+                    }
+                    return 0;
                 case WM_MOUSEMOVE:
                     e.type = EventType::MouseMove;
                     e.mouse = {f32(GET_X_LPARAM(lp)), f32(GET_Y_LPARAM(lp)), MouseButton::Left};
@@ -624,6 +745,8 @@ namespace helix::platform
             return nullptr;
         }
         window->hwnd = hwnd;
+        // Text input is off until asked for (a game's keys do not open the input method).
+        ImmAssociateContextEx(hwnd, nullptr, 0);
         if (!parent && desc.mode != WindowMode::Windowed)
             window->SetMode(desc.mode, desc.display, desc.exclusiveMode);
         if (desc.visible)

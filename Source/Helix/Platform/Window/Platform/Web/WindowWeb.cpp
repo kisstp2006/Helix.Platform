@@ -29,6 +29,81 @@ EM_JS(void, helix_web_lock_orientation, (int orientation), {
     screen.orientation.lock(names[orientation] || "any").catch(function() {});
 });
 
+// Text input: a hidden text area at the caret takes the keys while it is on, so the browser's input method can compose
+// into it. What it gets waits in a queue the window reads each frame: entries of kind (1 the composition, 2 committed
+// text), cursor, count and that many codepoints.
+EM_JS(void, helix_web_text_input, (const char* selector, int on, double left, double top), {
+    var s = Module.helixText || (Module.helixText = {queue : [], area : null, composing : false});
+    if (!on)
+    {
+        if (s.area)
+        {
+            s.area.blur();
+            s.area.remove();
+        }
+        s.area = null;
+        s.composing = false;
+        return;
+    }
+    if (!s.area)
+    {
+        var a = document.createElement("textarea");
+        a.setAttribute("autocomplete", "off");
+        a.setAttribute("autocorrect", "off");
+        a.setAttribute("autocapitalize", "off");
+        a.setAttribute("spellcheck", "false");
+        a.style.cssText = "position:fixed;opacity:0;width:1px;height:1px;padding:0;border:0;margin:0;resize:none;overflow:hidden;";
+        var push = function(kind, text, cursor) {
+            var cps = Array.from(text, function(c) { return c.codePointAt(0); });
+            s.queue.push(kind, cursor < 0 ? cps.length : cursor, cps.length);
+            for (var i = 0; i < cps.length; i++)
+                s.queue.push(cps[i]);
+        };
+        a.addEventListener("compositionstart", function() { s.composing = true; });
+        a.addEventListener("compositionupdate", function(e) { push(1, e.data || "", -1); });
+        a.addEventListener("compositionend", function(e) {
+            s.composing = false;
+            push(1, "", 0);
+            push(2, e.data || "", 0);
+            a.value = "";
+        });
+        a.addEventListener("input", function(e) {
+            if (s.composing || e.isComposing)
+                return;
+            if (e.data)
+                push(2, e.data, 0);
+            a.value = "";
+        });
+        document.body.appendChild(a);
+        s.area = a;
+    }
+    var canvas = document.querySelector(UTF8ToString(selector));
+    var r = canvas ? canvas.getBoundingClientRect() : {left : 0, top : 0};
+    s.area.style.left = (r.left + left) + "px";
+    s.area.style.top = (r.top + top) + "px";
+    if (document.activeElement !== s.area)
+        s.area.focus();
+});
+
+// Whole entries of the queue into out (at most capacity numbers); the count written.
+EM_JS(int, helix_web_text_take, (unsigned* out, int capacity), {
+    var s = Module.helixText;
+    if (!s || !s.queue.length)
+        return 0;
+    var n = 0;
+    while (n < s.queue.length)
+    {
+        var size = 3 + s.queue[n + 2];
+        if (n + size > capacity)
+            break;
+        n += size;
+    }
+    for (var i = 0; i < n; i++)
+        HEAPU32[(out >> 2) + i] = s.queue[i];
+    s.queue.splice(0, n);
+    return n;
+});
+
 namespace helix::platform
 {
     namespace
@@ -105,9 +180,57 @@ namespace helix::platform
             String selector;
             Array<Event> pending;
             bool focused = true;
+            bool textInput = false;
+
+            void SetTextInput(bool on, i32 caretX, i32 caretY, i32 caretHeight) override
+            {
+                if (!on && !textInput)
+                    return;
+                textInput = on;
+                f32 scale = GetContentScale();
+                helix_web_text_input(selector.CStr(), on ? 1 : 0, double(f32(caretX) / scale), double(f32(caretY + caretHeight) / scale));
+            }
+
+            // What the text area got since the last frame.
+            void TakeText()
+            {
+                u32 buffer[1024];
+                for (;;)
+                {
+                    int n = helix_web_text_take(buffer, 1024);
+                    if (n <= 0)
+                        return;
+                    for (int i = 0; i < n;)
+                    {
+                        u32 kind = buffer[i], cursor = buffer[i + 1], count = buffer[i + 2];
+                        const u32* cps = buffer + i + 3;
+                        i += 3 + int(count);
+                        if (kind == 1)
+                        {
+                            composition_.Clear();
+                            for (u32 k = 0; k < count; k++)
+                                composition_.Push(cps[k]);
+                            Event e;
+                            e.type = EventType::Composition;
+                            e.composition = {i32(cursor)};
+                            pending.Push(e);
+                        }
+                        else
+                            for (u32 k = 0; k < count; k++)
+                            {
+                                Event t;
+                                t.type = EventType::Text;
+                                t.text = {cps[k]};
+                                pending.Push(t);
+                            }
+                    }
+                }
+            }
 
             void PollEvents(Array<Event>& out) override
             {
+                if (textInput)
+                    TakeText();
                 for (const Event& e : pending)
                     out.Push(e);
                 pending.Clear();
@@ -204,6 +327,10 @@ namespace helix::platform
             e.repeat = k->repeat;
             e.key = {TranslateCode(k->code), u32(k->keyCode)};
             w->pending.Push(e);
+            // While text input is on the text area gets the characters (and lets the input method compose); only Tab is
+            // kept from moving the browser's focus away.
+            if (w->textInput)
+                return e.key.key == KeyCode::Tab;
             if (type == EMSCRIPTEN_EVENT_KEYDOWN && !k->ctrlKey && !k->metaKey)
             {
                 u32 cp = DecodeUtf8(k->key);
@@ -225,7 +352,9 @@ namespace helix::platform
             e.modifiers = Modifiers(m->shiftKey, m->ctrlKey, m->altKey, m->metaKey);
             MouseButton b = m->button == 0 ? MouseButton::Left : m->button == 1 ? MouseButton::Middle : m->button == 2 ? MouseButton::Right
                           : m->button == 3 ? MouseButton::X1 : MouseButton::X2;
-            e.mouse = {f32(m->targetX), f32(m->targetY), b};
+            // CSS pixels to the canvas's pixels.
+            f32 scale = w->GetContentScale();
+            e.mouse = {f32(m->targetX) * scale, f32(m->targetY) * scale, b};
             e.type = type == EMSCRIPTEN_EVENT_MOUSEDOWN ? EventType::MouseDown : type == EMSCRIPTEN_EVENT_MOUSEUP ? EventType::MouseUp : EventType::MouseMove;
             w->pending.Push(e);
             return EM_TRUE;
@@ -271,7 +400,8 @@ namespace helix::platform
                        : type == EMSCRIPTEN_EVENT_TOUCHMOVE  ? EventType::TouchMove
                        : type == EMSCRIPTEN_EVENT_TOUCHEND   ? EventType::TouchEnd
                                                              : EventType::TouchCancel;
-                e.touch = {i32(p.identifier), f32(p.targetX), f32(p.targetY)};
+                f32 scale = w->GetContentScale();
+                e.touch = {i32(p.identifier), f32(p.targetX) * scale, f32(p.targetY) * scale};
                 w->pending.Push(e);
             }
             return EM_TRUE;

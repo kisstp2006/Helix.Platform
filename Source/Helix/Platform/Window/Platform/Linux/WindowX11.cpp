@@ -6,6 +6,9 @@
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 
+#include <clocale>
+#include <cstring>
+
 namespace helix::platform
 {
     namespace
@@ -37,7 +40,25 @@ namespace helix::platform
             decltype(&XChangeProperty) ChangeProperty;
             decltype(&XGetWindowProperty) GetWindowProperty;
             decltype(&XFree) Free;
+            // The input method (optional: without it keys still give text).
+            decltype(&XSetLocaleModifiers) SetLocaleModifiers;
+            decltype(&XOpenIM) OpenIM;
+            decltype(&XCloseIM) CloseIM;
+            decltype(&XCreateIC) CreateIC;
+            decltype(&XDestroyIC) DestroyIC;
+            decltype(&XSetICFocus) SetICFocus;
+            decltype(&XUnsetICFocus) UnsetICFocus;
+            decltype(&XSetICValues) SetICValues;
+            decltype(&XVaCreateNestedList) VaCreateNestedList;
+            decltype(&XFilterEvent) FilterEvent;
+            decltype(&Xutf8LookupString) Utf8LookupString;
             bool loaded = false;
+
+            bool HasInputMethod() const
+            {
+                return SetLocaleModifiers && OpenIM && CloseIM && CreateIC && DestroyIC && SetICFocus && UnsetICFocus && SetICValues &&
+                       VaCreateNestedList && FilterEvent && Utf8LookupString;
+            }
 
             bool Load()
             {
@@ -69,7 +90,18 @@ namespace helix::platform
                 HX_X(ChangeProperty);
                 HX_X(GetWindowProperty);
                 HX_X(Free);
+                HX_X(SetLocaleModifiers);
+                HX_X(OpenIM);
+                HX_X(CloseIM);
+                HX_X(CreateIC);
+                HX_X(DestroyIC);
+                HX_X(SetICFocus);
+                HX_X(UnsetICFocus);
+                HX_X(SetICValues);
+                HX_X(VaCreateNestedList);
+                HX_X(FilterEvent);
 #undef HX_X
+                Utf8LookupString = library.Function<decltype(Utf8LookupString)>("Xutf8LookupString");
                 SetDetectableAutoRepeat = library.Function<decltype(SetDetectableAutoRepeat)>("XkbSetDetectableAutoRepeat");
                 loaded = OpenDisplay && NextEvent && CreateWindow;
                 return loaded;
@@ -159,6 +191,9 @@ namespace helix::platform
             return m;
         }
 
+        // The bytes of the UTF-8 sequence a lead byte starts.
+        int Utf8Length(u8 lead) { return lead < 0x80 ? 1 : (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : (lead & 0xF8) == 0xF0 ? 4 : 1; }
+
         u32 DecodeUtf8(const char* s, int n)
         {
             const u8* p = reinterpret_cast<const u8*>(s);
@@ -170,6 +205,8 @@ namespace helix::platform
                 return u32(p[0] & 0x1F) << 6 | u32(p[1] & 0x3F);
             if ((p[0] & 0xF0) == 0xE0 && n >= 3)
                 return u32(p[0] & 0x0F) << 12 | u32(p[1] & 0x3F) << 6 | u32(p[2] & 0x3F);
+            if ((p[0] & 0xF8) == 0xF0 && n >= 4)
+                return u32(p[0] & 0x07) << 18 | u32(p[1] & 0x3F) << 12 | u32(p[2] & 0x3F) << 6 | u32(p[3] & 0x3F);
             return 0;
         }
 
@@ -219,6 +256,63 @@ namespace helix::platform
             i32 width = 0, height = 0;
             bool focused = false;
             WindowMode mode = WindowMode::Windowed;
+            // The input method and its context (null without one); whether it may compose (text input on).
+            XIM im = nullptr;
+            XIC ic = nullptr;
+            bool spot = false;
+            bool textInput = false;
+
+            void OpenInputMethod()
+            {
+                if (!x.HasInputMethod())
+                    return;
+                // Input methods need the environment's character type; the rest of the locale is left alone.
+                const char* ctype = std::setlocale(LC_CTYPE, nullptr);
+                if (!ctype || std::strcmp(ctype, "C") == 0 || std::strcmp(ctype, "POSIX") == 0)
+                    std::setlocale(LC_CTYPE, "");
+                x.SetLocaleModifiers("");
+                im = x.OpenIM(display, nullptr, nullptr, nullptr);
+                if (!im)
+                    return;
+                // Over the spot (the method's window at the caret) when it can, else wherever it puts it.
+                ic = x.CreateIC(im, XNInputStyle, XIMPreeditPosition | XIMStatusNothing, XNClientWindow, handle, XNFocusWindow, handle, nullptr);
+                spot = ic != nullptr;
+                if (!ic)
+                    ic = x.CreateIC(im, XNInputStyle, XIMPreeditNothing | XIMStatusNothing, XNClientWindow, handle, XNFocusWindow, handle, nullptr);
+                if (ic)
+                    x.UnsetICFocus(ic);
+            }
+
+            void CloseInputMethod()
+            {
+                if (ic)
+                    x.DestroyIC(ic);
+                if (im)
+                    x.CloseIM(im);
+                ic = nullptr;
+                im = nullptr;
+            }
+
+            void SetTextInput(bool on, i32 caretX, i32 caretY, i32 caretHeight) override
+            {
+                if (!ic)
+                    return;
+                if (on != textInput)
+                {
+                    if (on)
+                        x.SetICFocus(ic);
+                    else
+                        x.UnsetICFocus(ic);
+                    textInput = on;
+                }
+                if (on && spot)
+                {
+                    XPoint point{short(caretX), short(caretY + caretHeight)};
+                    XVaNestedList list = x.VaCreateNestedList(0, XNSpotLocation, &point, nullptr);
+                    x.SetICValues(ic, XNPreeditAttributes, list, nullptr);
+                    x.Free(list);
+                }
+            }
 
             void SetSize(i32 w, i32 h) override
             {
@@ -291,6 +385,9 @@ namespace helix::platform
                 {
                     XEvent xe;
                     x.NextEvent(display, &xe);
+                    // Keys the input method takes compose; what they make comes back as a key press.
+                    if (ic && x.FilterEvent(&xe, None))
+                        continue;
                     Event e;
                     switch (xe.type)
                     {
@@ -327,16 +424,31 @@ namespace helix::platform
                         out.Push(e);
                         if (xe.type == KeyPress)
                         {
-                            char text[8];
+                            char text[256];
                             KeySym sym;
-                            int n = x.LookupString(&xe.xkey, text, sizeof(text), &sym, nullptr);
-                            u32 cp = DecodeUtf8(text, n);
-                            if (cp >= 32 && cp != 127)
+                            int n = 0;
+                            if (ic)
                             {
-                                Event t;
-                                t.type = EventType::Text;
-                                t.text = {cp};
-                                out.Push(t);
+                                Status status = 0;
+                                n = x.Utf8LookupString(ic, &xe.xkey, text, sizeof(text), &sym, &status);
+                                if (status != XLookupChars && status != XLookupBoth)
+                                    n = 0;
+                            }
+                            else
+                                n = x.LookupString(&xe.xkey, text, sizeof(text), &sym, nullptr);
+                            // Every character (an input method commits several at once).
+                            for (int i = 0; i < n;)
+                            {
+                                int length = Utf8Length(u8(text[i]));
+                                u32 cp = DecodeUtf8(text + i, n - i);
+                                i += length;
+                                if (cp >= 32 && cp != 127)
+                                {
+                                    Event t;
+                                    t.type = EventType::Text;
+                                    t.text = {cp};
+                                    out.Push(t);
+                                }
                             }
                         }
                         break;
@@ -479,6 +591,7 @@ namespace helix::platform
             x.SetWMNormalHints(display, handle, &hints);
         }
         window->SetTitle(desc.title);
+        window->OpenInputMethod();
         if (!desc.decorated)
             window->SetDecorated(false);
         if (desc.visible)
@@ -494,6 +607,7 @@ namespace helix::platform
         auto* w = static_cast<X11Window*>(window);
         if (!w)
             return;
+        w->CloseInputMethod();
         x.DestroyWindow(w->display, w->handle);
         x.CloseDisplay(w->display);
         Delete(HeapAllocator(), w);

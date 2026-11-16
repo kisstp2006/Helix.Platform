@@ -182,6 +182,9 @@ namespace helix::platform
         TouchMove,
         TouchEnd,
         TouchCancel,
+        // The text an input method (IME) composes changed: Window::Composition holds it (empty when the composition
+        // ended; its result comes as Text events).
+        Composition,
     };
 
     struct ResizeData
@@ -202,6 +205,7 @@ namespace helix::platform
 
     struct MouseData
     {
+        // In the window's framebuffer pixels from the top left (as touches).
         f32 x, y;
         MouseButton button;
     };
@@ -217,6 +221,12 @@ namespace helix::platform
         f32 x, y;
     };
 
+    struct CompositionData
+    {
+        // The cursor in the composed text (in codepoints).
+        i32 cursor;
+    };
+
     struct Event
     {
         EventType type = EventType::None;
@@ -230,6 +240,7 @@ namespace helix::platform
             MouseData mouse;
             WheelData wheel;
             TouchData touch;
+            CompositionData composition;
         };
 
         Event() : resize{0, 0} {}

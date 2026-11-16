@@ -9,7 +9,7 @@ helix_require(Core)
 helix_add_library(helix_platform ALIAS Platform PUBLIC_DEPS Helix::Core)
 
 if(HELIX_PLATFORM STREQUAL "windows")
-    target_link_libraries(helix_platform PRIVATE user32)
+    target_link_libraries(helix_platform PRIVATE user32 imm32)
 elseif(HELIX_PLATFORM STREQUAL "linux")
     find_package(Threads REQUIRED)
     target_link_libraries(helix_platform PUBLIC Threads::Threads ${CMAKE_DL_LIBS})

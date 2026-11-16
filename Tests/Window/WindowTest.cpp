@@ -43,6 +43,29 @@ HX_TEST(Window, CreatePollDestroy)
     Window::Destroy(w);
 }
 
+HX_TEST(Window, TextInputTurnsOnAndOffWithNothingComposed)
+{
+#if HX_PLATFORM_ANDROID
+    return;
+#endif
+    if (!Window::IsSupported())
+        return;
+    Window* w = Window::Create({.title = "helix text input", .width = 320, .height = 200, .visible = true});
+    HX_REQUIRE(w != nullptr);
+    Array<Event> events;
+    w->SetTextInput(true, 20, 40, 16);
+    // A second call moves the caret only.
+    w->SetTextInput(true, 60, 40, 16);
+    w->PollEvents(events);
+    HX_CHECK(w->Composition().Empty());
+    w->SetTextInput(false, 0, 0, 0);
+    w->PollEvents(events);
+    HX_CHECK(w->Composition().Empty());
+    for (const Event& e : events)
+        HX_CHECK(e.type != EventType::Composition);
+    Window::Destroy(w);
+}
+
 HX_TEST(Window, DisplaysAreListedWithThePrimaryFirst)
 {
 #if HX_PLATFORM_ANDROID
