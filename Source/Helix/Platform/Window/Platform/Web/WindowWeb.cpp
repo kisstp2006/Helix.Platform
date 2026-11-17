@@ -6,6 +6,11 @@
 #include <cstring>
 
 // The Screen Wake Lock API, where the browser has it.
+EM_JS(void, helix_web_clipboard_write, (const char* text), {
+    if (navigator.clipboard && navigator.clipboard.writeText)
+        navigator.clipboard.writeText(UTF8ToString(text)).catch(function() {});
+});
+
 EM_JS(void, helix_web_keep_screen_on, (int keepOn), {
     if (typeof navigator === "undefined" || !navigator.wakeLock)
         return;
@@ -206,6 +211,13 @@ namespace helix::platform
             Array<Event> pending;
             bool focused = true;
             bool textInput = false;
+
+            bool SetClipboardText(StringView text) override
+            {
+                clipboard_ = String(text);
+                helix_web_clipboard_write(clipboard_.CStr());
+                return true;
+            }
 
             bool SetCursor(SystemCursor shape) override
             {

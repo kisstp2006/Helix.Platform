@@ -152,10 +152,20 @@ namespace helix::platform
         }
         // The text being composed (codepoints), empty when nothing is; changes come as Composition events.
         Span<const u32> Composition() const { return Span<const u32>(composition_.Data(), composition_.Size()); }
+        // The system clipboard's text (UTF-8). Where the window reaches no clipboard (Android) it is the window's own:
+        // what was set last. On the Web the system's is written; reading it is the browser's to allow, so a read gives
+        // what this window set or pasted last.
+        virtual bool SetClipboardText(StringView text)
+        {
+            clipboard_ = String(text);
+            return true;
+        }
+        virtual String GetClipboardText() { return clipboard_; }
 
     protected:
         bool closeRequested_ = false;
         Array<u32> composition_;
+        String clipboard_;
     };
 
     using FrameFunction = bool (*)(void* user);

@@ -7,10 +7,10 @@ dynamic libraries, windows, input events and the main loop.
 
 | Platform | Window and input | Threads, time, files |
 |---|---|---|
-| Windows | Win32, per-monitor DPI v2, UTF-16 text input, IME through IMM32 (composition and candidates), system and image cursors | Win32 threads, SRW locks, high resolution waitable timers |
-| Linux | X11, libX11 is loaded at runtime; UTF-8 text and input methods through XIM; cursors of the cursor font, image cursors through libXcursor when it is there | pthreads, `clock_gettime` |
+| Windows | Win32, per-monitor DPI v2, UTF-16 text input, IME through IMM32 (composition and candidates), system and image cursors, the clipboard | Win32 threads, SRW locks, high resolution waitable timers |
+| Linux | X11, libX11 is loaded at runtime; UTF-8 text and input methods through XIM; cursors of the cursor font, image cursors through libXcursor when it is there; the CLIPBOARD selection (owned and asked for) | pthreads, `clock_gettime` |
 | Android | `ANativeWindow`, input and focus fed by the activity in `Android/` (Java and its JNI glue) through `Helix/Platform/Window/Android.h`; the APK's assets | pthreads |
-| Web | Canvas and DOM events through the Emscripten HTML5 API, a hidden text area for input methods while text input is on, CSS cursors (images as data URLs), `requestAnimationFrame` main loop | Single threaded unless built with pthreads |
+| Web | Canvas and DOM events through the Emscripten HTML5 API, a hidden text area for input methods while text input is on, CSS cursors (images as data URLs), the clipboard written through `navigator.clipboard`, `requestAnimationFrame` main loop | Single threaded unless built with pthreads |
 
 ## Layout
 

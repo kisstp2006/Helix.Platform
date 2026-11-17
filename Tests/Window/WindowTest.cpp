@@ -97,6 +97,22 @@ HX_TEST(Window, CursorsAreSystemShapesOrImages)
     Window::Destroy(w);
 }
 
+HX_TEST(Window, TheClipboardTakesTextAndGivesItBack)
+{
+    if (!Window::IsSupported())
+        return;
+    Window* w = Window::Create({.title = "helix clipboard", .width = 160, .height = 100, .visible = false});
+    HX_REQUIRE(w != nullptr);
+    // The text that was there goes back afterwards (the system's clipboard is the user's).
+    String before = w->GetClipboardText();
+    HX_CHECK(w->SetClipboardText("helix Ã¡rvÃ­ztÅ±rÅ clipboard"));
+    HX_CHECK(w->GetClipboardText() == StringView("helix Ã¡rvÃ­ztÅ±rÅ clipboard"));
+    HX_CHECK(w->SetClipboardText(""));
+    HX_CHECK(w->GetClipboardText().Empty());
+    w->SetClipboardText(before.View());
+    Window::Destroy(w);
+}
+
 HX_TEST(Window, DisplaysAreListedWithThePrimaryFirst)
 {
 #if HX_PLATFORM_ANDROID

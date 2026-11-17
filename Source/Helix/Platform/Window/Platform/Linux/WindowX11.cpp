@@ -1,6 +1,9 @@
 #include <Helix/Platform/System/DynamicLibrary.h>
 #include <Helix/Platform/Window/Window.h>
 
+#include <Helix/Platform/Time/Time.h>
+
+#include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/XKBlib.h>
 #include <X11/Xutil.h>
@@ -56,6 +59,12 @@ namespace helix::platform
             decltype(&XCreateFontCursor) CreateFontCursor;
             decltype(&XDefineCursor) DefineCursor;
             decltype(&XFreeCursor) FreeCursor;
+            // The clipboard (the CLIPBOARD selection).
+            decltype(&XSetSelectionOwner) SetSelectionOwner;
+            decltype(&XGetSelectionOwner) GetSelectionOwner;
+            decltype(&XConvertSelection) ConvertSelection;
+            decltype(&XCheckTypedWindowEvent) CheckTypedWindowEvent;
+            decltype(&XDeleteProperty) DeleteProperty;
             bool loaded = false;
 
             bool HasInputMethod() const
@@ -107,6 +116,11 @@ namespace helix::platform
                 HX_X(CreateFontCursor);
                 HX_X(DefineCursor);
                 HX_X(FreeCursor);
+                HX_X(SetSelectionOwner);
+                HX_X(GetSelectionOwner);
+                HX_X(ConvertSelection);
+                HX_X(CheckTypedWindowEvent);
+                HX_X(DeleteProperty);
 #undef HX_X
                 Utf8LookupString = library.Function<decltype(Utf8LookupString)>("Xutf8LookupString");
                 SetDetectableAutoRepeat = library.Function<decltype(SetDetectableAutoRepeat)>("XkbSetDetectableAutoRepeat");
@@ -315,6 +329,90 @@ namespace helix::platform
                 x.Flush(display);
             }
 
+            bool HasClipboard() const
+            {
+                return x.SetSelectionOwner && x.GetSelectionOwner && x.ConvertSelection && x.CheckTypedWindowEvent && x.DeleteProperty &&
+                       x.GetWindowProperty && x.ChangeProperty && x.SendEvent;
+            }
+
+            bool SetClipboardText(StringView text) override
+            {
+                clipboard_ = String(text);
+                if (!HasClipboard())
+                    return false;
+                // The window owns the selection and hands its text to whoever asks (SelectionRequest).
+                x.SetSelectionOwner(display, x.InternAtom(display, "CLIPBOARD", False), handle, CurrentTime);
+                x.Flush(display);
+                return true;
+            }
+
+            String GetClipboardText() override
+            {
+                if (!HasClipboard())
+                    return clipboard_;
+                Atom clipboard = x.InternAtom(display, "CLIPBOARD", False);
+                ::Window owner = x.GetSelectionOwner(display, clipboard);
+                if (owner == handle || owner == None)
+                    return owner == handle ? clipboard_ : String();
+                Atom utf8 = x.InternAtom(display, "UTF8_STRING", False);
+                Atom target = x.InternAtom(display, "HELIX_CLIPBOARD", False);
+                x.ConvertSelection(display, clipboard, utf8, target, handle, CurrentTime);
+                x.Flush(display);
+                // The owner answers with a SelectionNotify (a short wait: the owner is another program).
+                XEvent e;
+                bool answered = false;
+                for (i32 i = 0; i < 200 && !answered; i++)
+                {
+                    if (x.CheckTypedWindowEvent(display, handle, SelectionNotify, &e))
+                        answered = true;
+                    else
+                        SleepSeconds(0.001);
+                }
+                if (!answered || e.xselection.property == None)
+                    return String();
+                Atom type = 0;
+                int format = 0;
+                unsigned long count = 0, after = 0;
+                unsigned char* data = nullptr;
+                String out;
+                if (x.GetWindowProperty(display, handle, target, 0, 1 << 24, True, AnyPropertyType, &type, &format, &count, &after, &data) == Success &&
+                    data)
+                {
+                    out = String(StringView(reinterpret_cast<const char*>(data), usize(count)));
+                    x.Free(data);
+                }
+                return out;
+            }
+
+            // Another program asks for the selection this window owns: its text as UTF-8 (or the targets it has).
+            void AnswerSelection(const XSelectionRequestEvent& r)
+            {
+                Atom utf8 = x.InternAtom(display, "UTF8_STRING", False);
+                Atom targets = x.InternAtom(display, "TARGETS", False);
+                XEvent reply{};
+                reply.xselection.type = SelectionNotify;
+                reply.xselection.requestor = r.requestor;
+                reply.xselection.selection = r.selection;
+                reply.xselection.target = r.target;
+                reply.xselection.time = r.time;
+                reply.xselection.property = None;
+                Atom property = r.property != None ? r.property : r.target;
+                if (r.target == targets)
+                {
+                    Atom have[] = {targets, utf8, XA_STRING};
+                    x.ChangeProperty(display, r.requestor, property, XA_ATOM, 32, PropModeReplace, reinterpret_cast<const unsigned char*>(have), 3);
+                    reply.xselection.property = property;
+                }
+                else if (r.target == utf8 || r.target == XA_STRING)
+                {
+                    x.ChangeProperty(display, r.requestor, property, r.target, 8, PropModeReplace, reinterpret_cast<const unsigned char*>(clipboard_.Data()),
+                                     int(clipboard_.Size()));
+                    reply.xselection.property = property;
+                }
+                x.SendEvent(display, r.requestor, False, 0, &reply);
+                x.Flush(display);
+            }
+
             bool SetCursor(SystemCursor shape) override
             {
                 // The cursor font's shapes: left_ptr, xterm, hand2, sb_v_double_arrow, sb_h_double_arrow,
@@ -481,6 +579,9 @@ namespace helix::platform
                     Event e;
                     switch (xe.type)
                     {
+                    case SelectionRequest:
+                        AnswerSelection(xe.xselectionrequest);
+                        continue;
                     case ClientMessage:
                         if (Atom(xe.xclient.data.l[0]) == deleteAtom)
                         {

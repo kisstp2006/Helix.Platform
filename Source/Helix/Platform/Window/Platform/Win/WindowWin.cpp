@@ -399,6 +399,51 @@ namespace helix::platform
                 imageCursor = nullptr;
             }
 
+            bool SetClipboardText(StringView text) override
+            {
+                clipboard_ = String(text);
+                if (!OpenClipboard(hwnd))
+                    return false;
+                EmptyClipboard();
+                int n = MultiByteToWideChar(CP_UTF8, 0, text.Data(), int(text.Size()), nullptr, 0);
+                HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (SIZE_T(n) + 1) * sizeof(wchar_t));
+                bool ok = false;
+                if (memory)
+                {
+                    auto* wide = static_cast<wchar_t*>(GlobalLock(memory));
+                    if (n > 0)
+                        MultiByteToWideChar(CP_UTF8, 0, text.Data(), int(text.Size()), wide, n);
+                    wide[n] = 0;
+                    GlobalUnlock(memory);
+                    ok = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+                    if (!ok)
+                        GlobalFree(memory);
+                }
+                CloseClipboard();
+                return ok;
+            }
+
+            String GetClipboardText() override
+            {
+                if (!OpenClipboard(hwnd))
+                    return clipboard_;
+                String out;
+                if (HANDLE data = GetClipboardData(CF_UNICODETEXT))
+                    if (auto* wide = static_cast<const wchar_t*>(GlobalLock(data)))
+                    {
+                        int length = int(wcslen(wide));
+                        int n = WideCharToMultiByte(CP_UTF8, 0, wide, length, nullptr, 0, nullptr, nullptr);
+                        Array<char> bytes;
+                        bytes.Resize(usize(n));
+                        if (n > 0)
+                            WideCharToMultiByte(CP_UTF8, 0, wide, length, bytes.Data(), n, nullptr, nullptr);
+                        out = String(StringView(bytes.Data(), bytes.Size()));
+                        GlobalUnlock(data);
+                    }
+                CloseClipboard();
+                return out;
+            }
+
             bool SetCursor(SystemCursor shape) override
             {
                 // IDC_ARROW, IDC_IBEAM, IDC_HAND, IDC_SIZENS, IDC_SIZEWE, IDC_SIZENESW, IDC_SIZENWSE, IDC_SIZEALL, IDC_NO,
