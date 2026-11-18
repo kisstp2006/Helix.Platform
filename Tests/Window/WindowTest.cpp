@@ -228,3 +228,40 @@ HX_TEST(Window, ACustomFrameIsAllClientWithItsHitTest)
     w->PollEvents(events);
     Window::Destroy(w);
 }
+
+// Several windows at once: each its own size, place and events; a window owned by another (a tool window above it)
+// with a frame of its own.
+HX_TEST(Window, SeveralWindowsAndAnOwnedOne)
+{
+#if HX_PLATFORM_ANDROID || HX_PLATFORM_WEB
+    return;
+#endif
+    if (!Window::IsSupported())
+        return;
+    Window* main = Window::Create({.title = "helix main", .width = 400, .height = 300, .visible = true});
+    HX_REQUIRE(main != nullptr);
+    Window* owned = Window::Create({.title = "helix owned", .width = 260, .height = 180, .visible = true, .customFrame = true, .x = 120, .y = 140,
+                                    .owner = main->GetNativeHandle().window});
+    HX_REQUIRE(owned != nullptr);
+    Array<Event> events;
+    for (int i = 0; i < 3; i++)
+    {
+        main->PollEvents(events);
+        owned->PollEvents(events);
+    }
+    i32 w = 0, h = 0, x = 0, y = 0;
+    owned->GetSize(w, h);
+    HX_CHECK(w == 260 && h == 180);
+    main->GetSize(w, h);
+    HX_CHECK(w == 400 && h == 300);
+    owned->GetPosition(x, y);
+    HX_CHECK(x == 120 && y == 140);
+    owned->SetPosition(160, 170);
+    owned->PollEvents(events);
+    owned->GetPosition(x, y);
+    HX_CHECK(x == 160 && y == 170);
+    HX_CHECK(owned->HasCustomFrame());
+    Window::Destroy(owned);
+    main->PollEvents(events);
+    Window::Destroy(main);
+}

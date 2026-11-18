@@ -820,6 +820,13 @@ namespace helix::platform
         window->height = desc.height;
         window->deleteAtom = x.InternAtom(display, "WM_DELETE_WINDOW", False);
         x.SetWMProtocols(display, handle, &window->deleteAtom, 1);
+        // Transient for its owner: kept above it, no task bar entry of its own (XA_WINDOW is 33).
+        if (desc.owner)
+        {
+            unsigned long owner = static_cast<unsigned long>(reinterpret_cast<uintptr_t>(desc.owner));
+            Atom transient = x.InternAtom(display, "WM_TRANSIENT_FOR", False);
+            x.ChangeProperty(display, handle, transient, Atom(33), 32, PropModeReplace, reinterpret_cast<unsigned char*>(&owner), 1);
+        }
         if (x.SetDetectableAutoRepeat)
             x.SetDetectableAutoRepeat(display, True, nullptr);
         if (!desc.resizable && x.SetWMNormalHints)

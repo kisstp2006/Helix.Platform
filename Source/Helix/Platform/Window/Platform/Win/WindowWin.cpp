@@ -964,8 +964,9 @@ namespace helix::platform
         wchar_t title[256];
         int n = MultiByteToWideChar(CP_UTF8, 0, desc.title.Data(), int(desc.title.Size()), title, 255);
         title[n > 0 ? n : 0] = 0;
-        HWND hwnd = CreateWindowExW(0, kClassName, title, style, x, y, r.right - r.left, r.bottom - r.top, parent, nullptr,
-                                    GetModuleHandleW(nullptr), window);
+        // An embedded window's parent, else its owner (an owned window above it).
+        HWND hwnd = CreateWindowExW(0, kClassName, title, style, x, y, r.right - r.left, r.bottom - r.top, parent ? parent : static_cast<HWND>(desc.owner),
+                                    nullptr, GetModuleHandleW(nullptr), window);
         if (!hwnd)
         {
             Delete(HeapAllocator(), window);

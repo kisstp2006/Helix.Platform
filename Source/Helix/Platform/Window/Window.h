@@ -100,6 +100,9 @@ namespace helix::platform
         DisplayMode exclusiveMode;
         // A native window to embed into (Windows), filling its client area.
         void* parent = nullptr;
+        // A native window that owns this one (its NativeWindowHandle::window): the window stays above its owner and
+        // has no task bar button of its own (Windows: an owned window; X11: transient for the owner).
+        void* owner = nullptr;
         StringView canvasSelector = "#canvas";
     };
 
