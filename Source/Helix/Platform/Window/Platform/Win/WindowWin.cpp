@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <windowsx.h>
 
+#include <dwmapi.h>
 #include <imm.h>
 
 namespace helix::platform
@@ -200,6 +201,7 @@ namespace helix::platform
             HCURSOR pointer = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
             HCURSOR imageCursor = nullptr;
             DWORD windowedStyle = WS_OVERLAPPEDWINDOW;
+            bool resizable = true;
             WindowMode mode = WindowMode::Windowed;
             // The window's place while full screen, and the display whose mode was changed.
             RECT windowedRect{};
@@ -215,7 +217,9 @@ namespace helix::platform
                 if (mode == WindowMode::Maximized)
                     SetMode(WindowMode::Windowed, 0, {});
                 RECT r{0, 0, width, height};
-                AdjustWindowRectExForDpi(&r, CurrentStyle(), FALSE, 0, GetDpiForWindow(hwnd));
+                // A frame of the application's own is all client area.
+                if (!customFrame_)
+                    AdjustWindowRectExForDpi(&r, CurrentStyle(), FALSE, 0, GetDpiForWindow(hwnd));
                 SetWindowPos(hwnd, nullptr, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
 
@@ -557,6 +561,60 @@ namespace helix::platform
             f32 GetContentScale() const override { return f32(GetDpiForWindow(hwnd)) / 96.0f; }
             NativeWindowHandle GetNativeHandle() const override { return {hwnd, GetModuleHandleW(nullptr)}; }
             bool HasFocus() const override { return focused; }
+            void Minimize() override { ShowWindow(hwnd, SW_MINIMIZE); }
+            bool Minimized() const override { return ::IsIconic(hwnd) != 0; }
+
+            // The system frame's thickness at the window's DPI (the edges a custom frame keeps for resizing).
+            void FrameThickness(int& x, int& y) const
+            {
+                UINT dpi = GetDpiForWindow(hwnd);
+                int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                x = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + padded;
+                y = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + padded;
+            }
+
+            LRESULT HitTestFrame(LPARAM lp)
+            {
+                POINT pt{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+                ScreenToClient(hwnd, &pt);
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                if (resizable && !IsZoomed(hwnd))
+                {
+                    int fx, fy;
+                    FrameThickness(fx, fy);
+                    bool l = pt.x < fx, r = pt.x >= rc.right - fx, t = pt.y < fy, b = pt.y >= rc.bottom - fy;
+                    if (t && l)
+                        return HTTOPLEFT;
+                    if (t && r)
+                        return HTTOPRIGHT;
+                    if (b && l)
+                        return HTBOTTOMLEFT;
+                    if (b && r)
+                        return HTBOTTOMRIGHT;
+                    if (l)
+                        return HTLEFT;
+                    if (r)
+                        return HTRIGHT;
+                    if (t)
+                        return HTTOP;
+                    if (b)
+                        return HTBOTTOM;
+                }
+                switch (HitTest(pt.x, pt.y))
+                {
+                case WindowHitTest::Caption: return HTCAPTION;
+                case WindowHitTest::Left: return HTLEFT;
+                case WindowHitTest::Right: return HTRIGHT;
+                case WindowHitTest::Top: return HTTOP;
+                case WindowHitTest::Bottom: return HTBOTTOM;
+                case WindowHitTest::TopLeft: return HTTOPLEFT;
+                case WindowHitTest::TopRight: return HTTOPRIGHT;
+                case WindowHitTest::BottomLeft: return HTBOTTOMLEFT;
+                case WindowHitTest::BottomRight: return HTBOTTOMRIGHT;
+                default: return HTCLIENT;
+                }
+            }
 
             LRESULT Handle(UINT message, WPARAM wp, LPARAM lp)
             {
@@ -711,6 +769,33 @@ namespace helix::platform
                     Push(e);
                     return 0;
                 }
+                case WM_NCCALCSIZE:
+                    // A frame of the application's own: the whole window is client area; a maximized window reaches
+                    // past the display by its frame, which is taken back.
+                    if (customFrame_ && wp)
+                    {
+                        if (IsZoomed(hwnd))
+                        {
+                            auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(lp);
+                            int fx, fy;
+                            FrameThickness(fx, fy);
+                            p->rgrc[0].left += fx;
+                            p->rgrc[0].right -= fx;
+                            p->rgrc[0].top += fy;
+                            p->rgrc[0].bottom -= fy;
+                        }
+                        return 0;
+                    }
+                    break;
+                case WM_NCHITTEST:
+                    if (customFrame_)
+                        return HitTestFrame(lp);
+                    break;
+                case WM_NCACTIVATE:
+                    // No system frame is painted over the application's.
+                    if (customFrame_)
+                        return DefWindowProcW(hwnd, message, wp, -1);
+                    break;
                 case WM_DPICHANGED:
                 {
                     const RECT* r = reinterpret_cast<const RECT*>(lp);
@@ -845,6 +930,8 @@ namespace helix::platform
         if (parent)
             style = WS_CHILD | WS_CLIPSIBLINGS;
         window->windowedStyle = style;
+        window->resizable = desc.resizable;
+        window->customFrame_ = desc.customFrame && !parent && desc.decorated;
         // The size is in pixels of the display the window opens on.
         HMONITOR monitor = MonitorAt(desc.display);
         UINT dpi = UINT(MonitorDpi(monitor));
@@ -857,7 +944,8 @@ namespace helix::platform
             height = pr.bottom - pr.top;
         }
         RECT r{0, 0, LONG(width), LONG(height)};
-        AdjustWindowRectExForDpi(&r, style, FALSE, 0, dpi);
+        if (!(desc.customFrame && !parent && desc.decorated))
+            AdjustWindowRectExForDpi(&r, style, FALSE, 0, dpi);
         int x = CW_USEDEFAULT, y = CW_USEDEFAULT;
         if (parent)
             x = y = 0;
@@ -884,6 +972,13 @@ namespace helix::platform
             return nullptr;
         }
         window->hwnd = hwnd;
+        if (window->customFrame_)
+        {
+            // The system's shadow stays with a line of the frame kept in the client area; the frame is computed again.
+            MARGINS margins{0, 0, 1, 0};
+            DwmExtendFrameIntoClientArea(hwnd, &margins);
+            SetWindowPos(hwnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
         // Text input is off until asked for (a game's keys do not open the input method).
         ImmAssociateContextEx(hwnd, nullptr, 0);
         if (!parent && desc.mode != WindowMode::Windowed)

@@ -194,3 +194,37 @@ HX_TEST(Window, SizePositionAndModes)
 #endif
     Window::Destroy(w);
 }
+
+// A frame of the application's own: the whole window is the client area of the asked size; the hit test names the
+// caption; minimize and back.
+HX_TEST(Window, ACustomFrameIsAllClientWithItsHitTest)
+{
+#if HX_PLATFORM_ANDROID || HX_PLATFORM_WEB
+    return;
+#endif
+    if (!Window::IsSupported())
+        return;
+    Window* w = Window::Create({.title = "helix custom frame", .width = 400, .height = 240, .visible = true, .customFrame = true});
+    HX_REQUIRE(w != nullptr);
+    Array<Event> events;
+    w->PollEvents(events);
+    HX_CHECK(w->HasCustomFrame());
+    i32 width = 0, height = 0;
+    w->GetSize(width, height);
+    HX_CHECK(width == 400 && height == 240);
+    HX_CHECK(w->HitTest(10, 10) == WindowHitTest::Client);
+    w->SetHitTest([](void*, i32, i32 y) { return y < 30 ? WindowHitTest::Caption : WindowHitTest::Client; }, nullptr);
+    HX_CHECK(w->HitTest(100, 10) == WindowHitTest::Caption && w->HitTest(100, 100) == WindowHitTest::Client);
+    w->SetSize(420, 260);
+    w->PollEvents(events);
+    w->GetSize(width, height);
+    HX_CHECK(width == 420 && height == 260);
+    w->Minimize();
+    w->PollEvents(events);
+#if HX_PLATFORM_WINDOWS
+    HX_CHECK(w->Minimized());
+#endif
+    w->SetMode(WindowMode::Windowed);
+    w->PollEvents(events);
+    Window::Destroy(w);
+}

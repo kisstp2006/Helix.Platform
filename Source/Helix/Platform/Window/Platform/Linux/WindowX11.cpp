@@ -65,6 +65,8 @@ namespace helix::platform
             decltype(&XConvertSelection) ConvertSelection;
             decltype(&XCheckTypedWindowEvent) CheckTypedWindowEvent;
             decltype(&XDeleteProperty) DeleteProperty;
+            decltype(&XUngrabPointer) UngrabPointer;
+            decltype(&XIconifyWindow) IconifyWindow;
             bool loaded = false;
 
             bool HasInputMethod() const
@@ -121,6 +123,8 @@ namespace helix::platform
                 HX_X(ConvertSelection);
                 HX_X(CheckTypedWindowEvent);
                 HX_X(DeleteProperty);
+                HX_X(UngrabPointer);
+                HX_X(IconifyWindow);
 #undef HX_X
                 Utf8LookupString = library.Function<decltype(Utf8LookupString)>("Xutf8LookupString");
                 SetDetectableAutoRepeat = library.Function<decltype(SetDetectableAutoRepeat)>("XkbSetDetectableAutoRepeat");
@@ -558,6 +562,47 @@ namespace helix::platform
 
             WindowMode GetMode() const override { return mode; }
             u32 GetDisplay() const override { return 0; }
+            void Minimize() override
+            {
+                if (x.IconifyWindow)
+                    x.IconifyWindow(display, handle, DefaultScreen(display));
+                x.Flush(display);
+            }
+
+            // A press on a custom frame's caption or edge: the window manager moves or resizes the window
+            // (_NET_WM_MOVERESIZE: 8 moves, 0 to 7 the edges from the top left clockwise). False for the client area.
+            bool MoveOrResize(i32 px, i32 py, i32 rootX, i32 rootY)
+            {
+                long direction = -1;
+                switch (HitTest(px, py))
+                {
+                case WindowHitTest::Caption: direction = 8; break;
+                case WindowHitTest::TopLeft: direction = 0; break;
+                case WindowHitTest::Top: direction = 1; break;
+                case WindowHitTest::TopRight: direction = 2; break;
+                case WindowHitTest::Right: direction = 3; break;
+                case WindowHitTest::BottomRight: direction = 4; break;
+                case WindowHitTest::Bottom: direction = 5; break;
+                case WindowHitTest::BottomLeft: direction = 6; break;
+                case WindowHitTest::Left: direction = 7; break;
+                default: return false;
+                }
+                if (x.UngrabPointer)
+                    x.UngrabPointer(display, CurrentTime);
+                XEvent e{};
+                e.xclient.type = ClientMessage;
+                e.xclient.window = handle;
+                e.xclient.message_type = x.InternAtom(display, "_NET_WM_MOVERESIZE", False);
+                e.xclient.format = 32;
+                e.xclient.data.l[0] = rootX;
+                e.xclient.data.l[1] = rootY;
+                e.xclient.data.l[2] = direction;
+                e.xclient.data.l[3] = 1;
+                e.xclient.data.l[4] = 1;
+                x.SendEvent(display, RootWindow(display, DefaultScreen(display)), False, SubstructureRedirectMask | SubstructureNotifyMask, &e);
+                x.Flush(display);
+                return true;
+            }
 
             void SetDecorated(bool decorated)
             {
@@ -665,6 +710,10 @@ namespace helix::platform
                             }
                             break;
                         }
+                        // A frame of the application's own: a left press on its caption or edges goes to the window manager.
+                        if (customFrame_ && b == 1 && xe.type == ButtonPress &&
+                            MoveOrResize(xe.xbutton.x, xe.xbutton.y, xe.xbutton.x_root, xe.xbutton.y_root))
+                            break;
                         MouseButton mb = b == 1 ? MouseButton::Left : b == 2 ? MouseButton::Middle : b == 3 ? MouseButton::Right : b == 8 ? MouseButton::X1 : MouseButton::X2;
                         e.type = xe.type == ButtonPress ? EventType::MouseDown : EventType::MouseUp;
                         e.mouse = {f32(xe.xbutton.x), f32(xe.xbutton.y), mb};
@@ -783,7 +832,8 @@ namespace helix::platform
         }
         window->SetTitle(desc.title);
         window->OpenInputMethod();
-        if (!desc.decorated)
+        window->customFrame_ = desc.customFrame && desc.decorated;
+        if (!desc.decorated || window->customFrame_)
             window->SetDecorated(false);
         if (desc.visible)
             x.MapWindow(display, handle);

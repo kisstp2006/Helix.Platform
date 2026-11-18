@@ -57,6 +57,25 @@ namespace helix::platform
 
     inline constexpr i32 kDefaultWindowPosition = 0x7fffffff;
 
+    // What a point of a window with a frame of its own is (WindowDesc::customFrame): the application's client area, the
+    // caption that moves the window (a double click maximizes it), or an edge that resizes it.
+    enum class WindowHitTest : u8
+    {
+        Client,
+        Caption,
+        Left,
+        Right,
+        Top,
+        Bottom,
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+    };
+
+    // The hit test of a window with a frame of its own: client pixels from the top left.
+    using WindowHitTestFunction = WindowHitTest (*)(void* user, i32 x, i32 y);
+
     struct WindowDesc
     {
         StringView title = "Helix";
@@ -67,6 +86,10 @@ namespace helix::platform
         bool visible = true;
         // False: no frame and no title bar.
         bool decorated = true;
+        // The application draws the frame (an editor's title bar): no system title bar, while the system's resize
+        // edges, snapping and shadow stay where the platform keeps them (Windows; X11 moves and resizes through the
+        // window manager). The hit test (SetHitTest) names the caption; elsewhere the system frame stays.
+        bool customFrame = false;
         WindowMode mode = WindowMode::Windowed;
         // The display the window opens on (centered when no position is given) and goes full screen on.
         u32 display = 0;
@@ -126,6 +149,17 @@ namespace helix::platform
         // False when the mode is not available here (the window then takes the closest one, see GetMode).
         virtual bool SetMode(WindowMode mode, u32 display = 0, const DisplayMode& exclusive = {}) = 0;
         virtual WindowMode GetMode() const = 0;
+        // The window to the task bar and back (SetMode(Windowed) or SetMode(Maximized) brings it back too).
+        virtual void Minimize() {}
+        virtual bool Minimized() const { return false; }
+        // A window with a frame of its own: the function naming its caption and edges (null: all client).
+        void SetHitTest(WindowHitTestFunction function, void* user)
+        {
+            hitTest_ = function;
+            hitTestUser_ = user;
+        }
+        WindowHitTest HitTest(i32 x, i32 y) const { return hitTest_ ? hitTest_(hitTestUser_, x, y) : WindowHitTest::Client; }
+        bool HasCustomFrame() const { return customFrame_; }
         // The display that holds most of the window.
         virtual u32 GetDisplay() const = 0;
         bool CloseRequested() const { return closeRequested_; }
@@ -164,6 +198,9 @@ namespace helix::platform
 
     protected:
         bool closeRequested_ = false;
+        bool customFrame_ = false;
+        WindowHitTestFunction hitTest_ = nullptr;
+        void* hitTestUser_ = nullptr;
         Array<u32> composition_;
         String clipboard_;
     };
