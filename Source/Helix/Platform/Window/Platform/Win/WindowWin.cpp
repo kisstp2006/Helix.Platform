@@ -206,6 +206,9 @@ namespace helix::platform
             // The window's place while full screen, and the display whose mode was changed.
             RECT windowedRect{};
             bool haveWindowedRect = false;
+            // A hidden window's place before it was maximized.
+            RECT hiddenRect{};
+            bool haveHiddenRect = false;
             wchar_t exclusiveDevice[CCHDEVICENAME] = {};
 
             DWORD CurrentStyle() const { return DWORD(GetWindowLongPtrW(hwnd, GWL_STYLE)); }
@@ -214,7 +217,7 @@ namespace helix::platform
             {
                 if (mode == WindowMode::FullScreen || mode == WindowMode::ExclusiveFullScreen)
                     return;
-                if (mode == WindowMode::Maximized)
+                if (SystemMode() == WindowMode::Maximized)
                     SetMode(WindowMode::Windowed, 0, {});
                 RECT r{0, 0, width, height};
                 // A frame of the application's own is all client area.
@@ -233,7 +236,7 @@ namespace helix::platform
 
             void SetPosition(i32 x, i32 y) override
             {
-                if (mode != WindowMode::Windowed)
+                if (SystemMode() != WindowMode::Windowed)
                     return;
                 RECT window;
                 GetWindowRect(hwnd, &window);
@@ -251,8 +254,19 @@ namespace helix::platform
                 }
             }
 
+            // The mode as the system has it: the user maximizes and restores a window too (a double click on its
+            // caption, snapping), which this window learns of only here.
+            WindowMode SystemMode() const
+            {
+                // A hidden window is maximized by its size alone (below): its own record holds.
+                if (mode == WindowMode::FullScreen || mode == WindowMode::ExclusiveFullScreen || (CurrentStyle() & WS_VISIBLE) == 0)
+                    return mode;
+                return IsZoomed(hwnd) ? WindowMode::Maximized : WindowMode::Windowed;
+            }
+
             bool SetMode(WindowMode next, u32 display, const DisplayMode& exclusive) override
             {
+                mode = SystemMode();
                 bool full = next == WindowMode::FullScreen || next == WindowMode::ExclusiveFullScreen;
                 bool wasFull = mode == WindowMode::FullScreen || mode == WindowMode::ExclusiveFullScreen;
                 if (!wasFull && full)
@@ -306,8 +320,16 @@ namespace helix::platform
                 }
                 else
                 {
-                    SetWindowLongPtrW(hwnd, GWL_STYLE, LONG_PTR(windowedStyle | (CurrentStyle() & WS_VISIBLE)));
-                    if (wasFull && haveWindowedRect)
+                    // The maximized and minimized bits kept: without them SW_RESTORE has nothing to restore and the
+                    // window stays as large as the display.
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, LONG_PTR(windowedStyle | (CurrentStyle() & (WS_VISIBLE | WS_MAXIMIZE | WS_MINIMIZE))));
+                    bool hiddenRestore = (CurrentStyle() & WS_VISIBLE) == 0 && mode == WindowMode::Maximized && next == WindowMode::Windowed && haveHiddenRect;
+                    if (hiddenRestore)
+                    {
+                        const RECT& r = hiddenRect;
+                        SetWindowPos(hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                    else if (wasFull && haveWindowedRect)
                     {
                         const RECT& r = windowedRect;
                         SetWindowPos(hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
@@ -318,7 +340,12 @@ namespace helix::platform
                         ShowWindow(hwnd, next == WindowMode::Maximized ? SW_MAXIMIZE : SW_RESTORE);
                     else if (next == WindowMode::Maximized)
                     {
-                        // A hidden window takes the work area of its display.
+                        // A hidden window takes the work area of its display (its place kept for the way back).
+                        if (mode == WindowMode::Windowed)
+                        {
+                            GetWindowRect(hwnd, &hiddenRect);
+                            haveHiddenRect = true;
+                        }
                         MONITORINFOEXW mi;
                         MonitorDevice(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), mi);
                         const RECT& r = mi.rcWork;
@@ -329,7 +356,7 @@ namespace helix::platform
                 return ok;
             }
 
-            WindowMode GetMode() const override { return mode; }
+            WindowMode GetMode() const override { return SystemMode(); }
 
             u32 GetDisplay() const override
             {
