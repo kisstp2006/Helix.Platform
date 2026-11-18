@@ -43,6 +43,8 @@ namespace helix::platform
         StringView name;
         bool isDirectory;
         i64 size;
+        // The last write, in nanoseconds since 1970 (0 where the system does not tell).
+        i64 modified = 0;
     };
 
     using DirectoryCallback = void (*)(const DirectoryEntry& entry, void* user);

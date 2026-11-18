@@ -18,7 +18,7 @@ dynamic libraries, windows, input events and the main loop.
 |---|---|
 | `Source/Helix/Platform/Time/Time.h` | `Ticks`, `Now`, `SleepSeconds`, `Stopwatch` |
 | `Source/Helix/Platform/Threading/Thread.h` | `Thread`, `Mutex`, `ConditionVariable`, `Semaphore`, `SpinLock`, core count |
-| `Source/Helix/Platform/IO/FileSystem.h` | `File`, whole file read and write, directories, listing, paths |
+| `Source/Helix/Platform/IO/FileSystem.h` | `File`, whole file read and write, directories, listing (with each entry's size and last write time), paths |
 | `Source/Helix/Platform/System/DynamicLibrary.h` | `DynamicLibrary` |
 | `Source/Helix/Platform/System/Process.h` | `SingleInstance`, `IsDebuggerAttached`, `WaitForNativeDebugger` |
 | `Source/Helix/Platform/Window/Input.h` | `KeyCode` (script API values), mouse buttons, `Event` (keys, text, mouse and touches in the framebuffer's pixels, wheel, the composition of an input method) |

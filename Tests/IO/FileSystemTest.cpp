@@ -47,7 +47,8 @@ HX_TEST(FileSystem, WriteReadListRemove)
     }
     int count = 0;
     HX_CHECK(ListDirectory(nested, [](const DirectoryEntry& e, void* user) {
-        if (e.name == "data.bin" && !e.isDirectory && e.size == 303)
+        // Written now: after 2020-01-01 (1577836800 s) and before 2100.
+        if (e.name == "data.bin" && !e.isDirectory && e.size == 303 && e.modified > 1577836800LL * 1000000000LL && e.modified < 4102444800LL * 1000000000LL)
             ++*static_cast<int*>(user);
     }, &count));
     HX_CHECK_EQ(count, 1);

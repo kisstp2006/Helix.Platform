@@ -165,7 +165,10 @@ namespace helix::platform
                 name.Resize(name.Size() - 1);
             bool dir = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
             i64 size = dir ? 0 : i64((u64(data.nFileSizeHigh) << 32) | data.nFileSizeLow);
-            callback({name.View(), dir, size}, user);
+            // FILETIME: 100 ns since 1601.
+            i64 ticks = i64((u64(data.ftLastWriteTime.dwHighDateTime) << 32) | data.ftLastWriteTime.dwLowDateTime);
+            i64 modified = (ticks - 116444736000000000LL) * 100;
+            callback({name.View(), dir, size, modified}, user);
         } while (FindNextFileW(find, &data));
         FindClose(find);
         return true;

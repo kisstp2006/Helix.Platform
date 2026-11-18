@@ -141,13 +141,18 @@ namespace helix::platform
             String full = JoinPath(path, name);
             struct stat st;
             bool isDir = false;
-            i64 size = 0;
+            i64 size = 0, modified = 0;
             if (stat(full.CStr(), &st) == 0)
             {
                 isDir = S_ISDIR(st.st_mode);
                 size = isDir ? 0 : i64(st.st_size);
+#if defined(__APPLE__)
+                modified = i64(st.st_mtimespec.tv_sec) * 1000000000LL + i64(st.st_mtimespec.tv_nsec);
+#else
+                modified = i64(st.st_mtim.tv_sec) * 1000000000LL + i64(st.st_mtim.tv_nsec);
+#endif
             }
-            callback({name, isDir, size}, user);
+            callback({name, isDir, size, modified}, user);
         }
         closedir(dir);
         return true;
